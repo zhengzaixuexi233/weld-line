@@ -149,3 +149,5 @@ data/videos/*.mp4
 data/videos/*.avi
 output/
 *.yaml.bak
+
+.git/credentials

@@ -2,17 +2,23 @@
 摄像头输入源模块
 
 处理摄像头实时捕获。
+遵循 OpenCV 最佳实践：正确释放资源、使用上下文管理器。
 """
 
 import cv2
 import numpy as np
+import logging
 from typing import Optional, Tuple
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 class CameraSource:
     """摄像头输入源
     
     支持USB摄像头和网络摄像头。
+    遵循 OpenCV 最佳实践：使用上下文管理器确保资源释放。
     
     Attributes:
         camera_id: 摄像头ID或URL
@@ -41,6 +47,20 @@ class CameraSource:
         self.height: int = 0
         self.fps: int = fps
         self._resolution = resolution
+        self._frame_count = 0
+        
+        logger.info(f"CameraSource 初始化: camera_id={camera_id}, "
+                   f"resolution={resolution}, fps={fps}")
+    
+    def __enter__(self):
+        """上下文管理器入口"""
+        self.open()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器出口（确保资源释放）"""
+        self.release()
+        return False
     
     def open(self) -> bool:
         """打开摄像头
@@ -51,8 +71,11 @@ class CameraSource:
         if self.cap is not None:
             self.release()
         
+        logger.info(f"正在打开摄像头 {self.camera_id}...")
         self.cap = cv2.VideoCapture(self.camera_id)
+        
         if not self.cap.isOpened():
+            logger.error(f"无法打开摄像头 {self.camera_id}")
             return False
         
         # 设置分辨率
@@ -67,6 +90,7 @@ class CameraSource:
         # 设置帧率
         self.cap.set(cv2.CAP_PROP_FPS, self.fps)
         
+        logger.info(f"摄像头已打开: {self.width}x{self.height} @ {self.fps}fps")
         return True
     
     def get_frame(self) -> Optional[np.ndarray]:
@@ -76,20 +100,24 @@ class CameraSource:
             帧图像，错误返回None
         """
         if self.cap is None or not self.cap.isOpened():
+            logger.warning("摄像头未打开，无法获取帧")
             return None
         
         ret, frame = self.cap.read()
         if ret:
+            self._frame_count += 1
             return frame
+        
+        logger.warning("无法读取帧")
         return None
     
     def get_frame_count(self) -> int:
-        """获取帧数
+        """获取已捕获帧数
         
         Returns:
-            摄像头返回-1表示无限流
+            已捕获帧数
         """
-        return -1
+        return self._frame_count
     
     def get_resolution(self) -> Optional[Tuple[int, int]]:
         """获取分辨率
@@ -126,6 +154,7 @@ class CameraSource:
             是否设置成功
         """
         if self.cap is None:
+            logger.warning("摄像头未打开，无法设置分辨率")
             return False
         
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
@@ -138,14 +167,20 @@ class CameraSource:
         if actual_width == width and actual_height == height:
             self.width = width
             self.height = height
+            logger.info(f"分辨率已设置为: {width}x{height}")
             return True
+        
+        logger.warning(f"分辨率设置失败: 期望 {width}x{height}, "
+                      f"实际 {actual_width}x{actual_height}")
         return False
     
     def release(self):
-        """释放资源"""
+        """释放资源（遵循 OpenCV 最佳实践）"""
         if self.cap is not None:
+            logger.info(f"释放摄像头资源 (已捕获 {self._frame_count} 帧)")
             self.cap.release()
             self.cap = None
+            self._frame_count = 0
     
     @staticmethod
     def list_cameras() -> list:
@@ -155,9 +190,16 @@ class CameraSource:
             摄像头ID列表
         """
         cameras = []
+        logger.info("正在扫描可用摄像头...")
+        
         for i in range(10):  # 检查前10个ID
             cap = cv2.VideoCapture(i)
             if cap.isOpened():
                 cameras.append(i)
                 cap.release()
+                logger.info(f"发现摄像头: ID={i}")
+        
+        if not cameras:
+            logger.warning("未发现可用摄像头")
+        
         return cameras

@@ -2,14 +2,33 @@
 焊缝检测器模块
 
 实现基于霍夫变换的直线焊缝检测算法。
+遵循 python-performance-optimization 技能的最佳实践。
 """
 
 import cv2
 import numpy as np
+import logging
+import time
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
+from functools import wraps
 
-from .preprocessing import ImagePreprocessor
+from .preprocessing import ImagePreprocessor, validate_image
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
+
+def measure_time(func):
+    """性能测量装饰器（遵循 python-performance-optimization 最佳实践）"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed_time = time.perf_counter() - start_time
+        logger.debug(f"{func.__name__} 执行时间: {elapsed_time:.4f}秒")
+        return result
+    return wrapper
 
 
 @dataclass
@@ -34,6 +53,7 @@ class WeldDetector:
     """焊缝检测器
     
     使用霍夫变换检测图像中的直线焊缝。
+    遵循 computer-vision-opencv 和 python-performance-optimization 最佳实践。
     
     Attributes:
         preprocessor: 图像预处理器
@@ -68,13 +88,22 @@ class WeldDetector:
         """
         self.preprocessor = preprocessor or ImagePreprocessor()
         
+        # 检测参数
         self.canny_low = canny_low
         self.canny_high = canny_high
         self.hough_threshold = hough_threshold
         self.min_line_length = min_line_length
         self.max_line_gap = max_line_gap
         self.angle_tolerance = angle_tolerance
+        
+        # 性能统计
+        self._detection_count = 0
+        self._total_detection_time = 0.0
+        
+        logger.info(f"WeldDetector 初始化: canny=[{canny_low}, {canny_high}], "
+                   f"hough_threshold={hough_threshold}")
     
+    @measure_time
     def detect_edges(self, image: np.ndarray) -> np.ndarray:
         """检测边缘
         
@@ -84,12 +113,12 @@ class WeldDetector:
         Returns:
             边缘图像
         """
+        validate_image(image, "边缘检测输入图像")
         return cv2.Canny(image, self.canny_low, self.canny_high)
     
+    @measure_time
     def detect_lines(self, edges: np.ndarray) -> Optional[np.ndarray]:
-        """检测直线
-        
-        使用概率霍夫变换检测直线。
+        """检测直线（使用概率霍夫变换）
         
         Args:
             edges: 边缘图像
@@ -97,6 +126,8 @@ class WeldDetector:
         Returns:
             线段数组，每条线段为 [x1, y1, x2, y2]，无检测结果返回None
         """
+        validate_image(edges, "直线检测输入图像")
+        
         lines = cv2.HoughLinesP(
             edges,
             rho=1,
@@ -123,8 +154,11 @@ class WeldDetector:
         Returns:
             元组：(长度, 角度)
         """
-        length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-        angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+        # 使用 numpy 进行向量化计算（遵循性能优化最佳实践）
+        dx = x2 - x1
+        dy = y2 - y1
+        length = np.sqrt(dx * dx + dy * dy)
+        angle = np.degrees(np.arctan2(dy, dx))
         return length, angle
     
     def filter_lines(
@@ -270,6 +304,7 @@ class WeldDetector:
             angle=angle
         )
     
+    @measure_time
     def detect(
         self,
         image: np.ndarray,
@@ -286,9 +321,18 @@ class WeldDetector:
         Returns:
             元组：(检测到的线段, 预处理图像, 边缘图像)
         """
+        start_time = time.perf_counter()
+        
+        # 验证输入
+        validate_image(image, "检测输入图像")
+        
         # ROI处理
         if roi is not None:
             x, y, w, h = roi
+            # 验证 ROI 范围
+            img_h, img_w = image.shape[:2]
+            if x < 0 or y < 0 or x + w > img_w or y + h > img_h:
+                raise ValueError(f"ROI 超出图像范围: roi=({x},{y},{w},{h}), 图像大小=({img_w},{img_h})")
             roi_image = image[y:y+h, x:x+w]
         else:
             roi_image = image
@@ -318,7 +362,31 @@ class WeldDetector:
                 line.x2 += x
                 line.y2 += y
         
+        # 更新性能统计
+        elapsed_time = time.perf_counter() - start_time
+        self._detection_count += 1
+        self._total_detection_time += elapsed_time
+        
+        logger.info(f"检测完成: 发现 {len(filtered_lines)} 条焊缝，"
+                   f"耗时 {elapsed_time:.4f}秒")
+        
         return filtered_lines, enhanced, edges
+    
+    def get_performance_stats(self) -> dict:
+        """获取性能统计信息
+        
+        Returns:
+            包含性能统计的字典
+        """
+        avg_time = (self._total_detection_time / self._detection_count 
+                   if self._detection_count > 0 else 0)
+        
+        return {
+            'detection_count': self._detection_count,
+            'total_time': self._total_detection_time,
+            'average_time': avg_time,
+            'fps': 1.0 / avg_time if avg_time > 0 else 0
+        }
     
     def update_params(self, **kwargs):
         """更新检测参数
@@ -329,6 +397,7 @@ class WeldDetector:
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+                logger.info(f"更新参数 {key}: {value}")
         
         # 更新预处理器参数
         preprocessor_params = {
