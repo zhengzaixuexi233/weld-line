@@ -144,6 +144,12 @@ python main.py
 3. **实时性**：目标帧率≥15fps
 4. **硬件要求**：普通USB摄像头即可
 
+
+## 上下文维护规则
+
+较大改动后（新增功能、重构模块、修改核心算法、调整 GUI 布局等），应：
+1. 更新 AGENTS.md 对应章节，使其反映项目**当前状态**，避免后续对话信息过时或浪费 token。
+2. 在 README.md「更新日志」末尾追加一条变更记录，格式：- YYYY-MM-DD: 变更描述。
 ## 相关资源
 
 - [OpenCV文档](https://docs.opencv.org/)
@@ -270,7 +276,4 @@ python main.py
 3. **组合使用**: 复杂任务可能需要多个 skills 配合
 4. **文档记录**: 使用 skill 后应在代码中注明来源
 
-## Skills 更新日志
 
-- 2026-05-24: 初始创建项目，添加相关 skills 信息
-- 2026-05-24: 根据 computer-vision-opencv 和 python-performance-optimization 优化代码

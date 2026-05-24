@@ -32,7 +32,7 @@ class ConfigManager:
             'hough_threshold': 50,
             'min_line_length': 50,
             'max_line_gap': 10,
-            'angle_tolerance': 15.0
+            'angle_tolerance': 15
         },
         'display': {
             'line_color': [0, 255, 0],

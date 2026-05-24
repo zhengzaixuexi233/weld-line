@@ -3,6 +3,7 @@ GUI主窗口模块
 """
 import cv2
 import numpy as np
+from pathlib import Path
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFileDialog, QStatusBar, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
@@ -23,6 +24,11 @@ class MainWindow(QMainWindow):
         self.detector = WeldDetector()
         self.current_source = None
         self.is_detecting = False
+        self.image_list = []
+        self.current_image_index = 0
+        self._last_frame = None
+        self._last_result = None
+        self._last_edges = None
         self._init_ui()
         self._load_config()
         self._setup_timer()
@@ -45,16 +51,26 @@ class MainWindow(QMainWindow):
         self.result_label.setMinimumSize(400, 300)
         self.result_label.setStyleSheet("border: 1px solid gray;")
         
+        self.edges_label = QLabel("边缘图")
+        self.edges_label.setAlignment(Qt.AlignCenter)
+        self.edges_label.setMinimumSize(400, 300)
+        self.edges_label.setStyleSheet("border: 1px solid gray;")
+        self.edges_label.hide()
+        
         display_layout.addWidget(self.original_label)
         display_layout.addWidget(self.result_label)
+        display_layout.addWidget(self.edges_label)
         
         self.control_panel = ControlPanel()
-        self.control_panel.setFixedWidth(300)
+        self.control_panel.setFixedWidth(380)
         
         self.control_panel.detect_clicked.connect(self._on_detect_clicked)
         self.control_panel.source_changed.connect(self._on_source_changed)
         self.control_panel.param_changed.connect(self._on_param_changed)
         self.control_panel.file_button.clicked.connect(self._on_file_select)
+        self.control_panel.prev_image_clicked.connect(self._on_prev_image)
+        self.control_panel.next_image_clicked.connect(self._on_next_image)
+        self.control_panel.display_option_changed.connect(self._on_display_option_changed)
         
         main_layout.addLayout(display_layout)
         main_layout.addWidget(self.control_panel)
@@ -67,6 +83,8 @@ class MainWindow(QMainWindow):
             "canny_high": self.config_manager.get("detection.canny_high", 150),
             "hough_threshold": self.config_manager.get("detection.hough_threshold", 50),
             "min_line_length": self.config_manager.get("detection.min_line_length", 50),
+            "max_line_gap": self.config_manager.get("detection.max_line_gap", 10),
+            "angle_tolerance": self.config_manager.get("detection.angle_tolerance", 15),
         }
         self.control_panel.set_params(params)
     
@@ -86,6 +104,61 @@ class MainWindow(QMainWindow):
         self.stop_detection()
         if source == "camera":
             self.current_source = CameraSource()
+            self._update_browse_buttons(False, False)
+        elif source == "image":
+            data_dir = Path(__file__).resolve().parents[3] / "data" / "images"
+            if data_dir.exists():
+                self.image_list = ImageSource.list_images(data_dir)
+                if self.image_list:
+                    self.current_image_index = 0
+                    self.current_source = ImageSource(str(self.image_list[0]))
+                    self.statusBar().showMessage(f"已自动加载: {self.image_list[0].name} (1/{len(self.image_list)})")
+                    self._update_browse_buttons(False, len(self.image_list) > 1)
+                else:
+                    self.current_source = None
+                    self.image_list = []
+                    self.statusBar().showMessage("data/images 目录为空，请放入图片")
+                    self._update_browse_buttons(False, False)
+            else:
+                self.current_source = None
+                self.image_list = []
+                self.statusBar().showMessage("data/images 目录不存在")
+                self._update_browse_buttons(False, False)
+        else:
+            self._update_browse_buttons(False, False)
+    
+    def _update_browse_buttons(self, has_prev, has_next):
+        """更新浏览按钮状态"""
+        self.control_panel.prev_button.setEnabled(has_prev)
+        self.control_panel.next_button.setEnabled(has_next)
+    
+    @pyqtSlot()
+    def _on_prev_image(self):
+        if not self.image_list or self.current_image_index <= 0:
+            return
+        self.stop_detection()
+        self.current_image_index -= 1
+        self.current_source = ImageSource(str(self.image_list[self.current_image_index]))
+        self.statusBar().showMessage(f"已加载: {self.image_list[self.current_image_index].name} ({self.current_image_index + 1}/{len(self.image_list)})")
+        self._update_browse_buttons(self.current_image_index > 0, self.current_image_index < len(self.image_list) - 1)
+        # 自动显示图片
+        frame = self.current_source.get_frame()
+        if frame is not None:
+            self._display_image(frame, self.original_label)
+    
+    @pyqtSlot()
+    def _on_next_image(self):
+        if not self.image_list or self.current_image_index >= len(self.image_list) - 1:
+            return
+        self.stop_detection()
+        self.current_image_index += 1
+        self.current_source = ImageSource(str(self.image_list[self.current_image_index]))
+        self.statusBar().showMessage(f"已加载: {self.image_list[self.current_image_index].name} ({self.current_image_index + 1}/{len(self.image_list)})")
+        self._update_browse_buttons(self.current_image_index > 0, self.current_image_index < len(self.image_list) - 1)
+        # 自动显示图片
+        frame = self.current_source.get_frame()
+        if frame is not None:
+            self._display_image(frame, self.original_label)
     
     @pyqtSlot(str, object)
     def _on_param_changed(self, name, value):
@@ -94,11 +167,28 @@ class MainWindow(QMainWindow):
             "Canny低阈值": "canny_low",
             "Canny高阈值": "canny_high",
             "霍夫阈值": "hough_threshold",
-            "最小长度": "min_line_length"
+            "最小长度": "min_line_length",
+            "最大线段间隔": "max_line_gap",
+            "角度容差": "angle_tolerance"
         }
         param_name = param_map.get(name)
         if param_name:
             self.detector.update_params(**{param_name: value})
+    
+    @pyqtSlot()
+    def _on_display_option_changed(self):
+        """显示选项改变时更新面板可见性"""
+        options = self.control_panel.get_display_options()
+        self.original_label.setVisible(options['show_original'])
+        self.result_label.setVisible(options['show_processed'])
+        self.edges_label.setVisible(options['show_edges'])
+        if self._last_frame is not None:
+            if options['show_original']:
+                self._display_image(self._last_frame, self.original_label)
+            if options['show_processed']:
+                self._display_image(self._last_result, self.result_label)
+            if options['show_edges']:
+                self._display_image(self._last_edges, self.edges_label)
     
     @pyqtSlot()
     def _on_file_select(self):
@@ -111,12 +201,20 @@ class MainWindow(QMainWindow):
                 self.current_source = VideoSource(file_path)
                 self.statusBar().showMessage(f"已加载视频: {file_path}")
         elif current_source == "图像文件":
+            default_dir = str(Path(__file__).resolve().parents[3] / "data" / "images")
             file_path, _ = QFileDialog.getOpenFileName(
-                self, "选择图像文件", "",
+                self, "选择图像文件", default_dir,
                 "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
             if file_path:
                 self.current_source = ImageSource(file_path)
+                self.image_list = []
+                self.current_image_index = 0
+                self._update_browse_buttons(False, False)
                 self.statusBar().showMessage(f"已加载图像: {file_path}")
+                # 自动显示图片
+                frame = self.current_source.get_frame()
+                if frame is not None:
+                    self._display_image(frame, self.original_label)
     
     def start_detection(self):
         if self.current_source is None:
@@ -150,8 +248,16 @@ class MainWindow(QMainWindow):
             return
         detections, processed, edges = self.detector.detect(frame)
         result_frame = draw_detections(frame, detections)
-        self._display_image(frame, self.original_label)
-        self._display_image(result_frame, self.result_label)
+        self._last_frame = frame
+        self._last_result = result_frame
+        self._last_edges = edges
+        options = self.control_panel.get_display_options()
+        if options['show_original']:
+            self._display_image(frame, self.original_label)
+        if options['show_processed']:
+            self._display_image(result_frame, self.result_label)
+        if options['show_edges']:
+            self._display_image(edges, self.edges_label)
         self.statusBar().showMessage(f"检测到 {len(detections)} 条焊缝")
     
     def _display_image(self, image, label):

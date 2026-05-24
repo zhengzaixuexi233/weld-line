@@ -27,6 +27,9 @@ class ControlPanel(QWidget):
     param_changed = pyqtSignal(str, object)
     detect_clicked = pyqtSignal()
     source_changed = pyqtSignal(str)
+    prev_image_clicked = pyqtSignal()
+    next_image_clicked = pyqtSignal()
+    display_option_changed = pyqtSignal()
     
     def __init__(self, parent=None):
         """初始化控制面板"""
@@ -48,8 +51,22 @@ class ControlPanel(QWidget):
         self.file_button = QPushButton("选择文件")
         self.file_button.setEnabled(False)
         
+        # 图片浏览按钮
+        self.prev_button = QPushButton("上一张")
+        self.prev_button.setEnabled(False)
+        self.prev_button.clicked.connect(self.prev_image_clicked.emit)
+        self.next_button = QPushButton("下一张")
+        self.next_button.setEnabled(False)
+        self.next_button.clicked.connect(self.next_image_clicked.emit)
+        
         source_layout.addWidget(self.source_combo)
         source_layout.addWidget(self.file_button)
+        
+        browse_layout = QHBoxLayout()
+        browse_layout.addWidget(self.prev_button)
+        browse_layout.addWidget(self.next_button)
+        source_layout.addLayout(browse_layout)
+        
         source_group.setLayout(source_layout)
         layout.addWidget(source_group)
         
@@ -85,11 +102,19 @@ class ControlPanel(QWidget):
         self.min_length_slider = self._create_slider(
             "最小长度", 10, 500, 50, 10
         )
+        self.max_gap_slider = self._create_slider(
+            "最大线段间隔", 1, 100, 10, 1
+        )
+        self.angle_tolerance_slider = self._create_slider(
+            "角度容差", 1, 90, 15, 1
+        )
         
         detect_layout.addWidget(self.canny_low_slider)
         detect_layout.addWidget(self.canny_high_slider)
         detect_layout.addWidget(self.hough_slider)
         detect_layout.addWidget(self.min_length_slider)
+        detect_layout.addWidget(self.max_gap_slider)
+        detect_layout.addWidget(self.angle_tolerance_slider)
         detect_group.setLayout(detect_layout)
         layout.addWidget(detect_group)
         
@@ -109,6 +134,11 @@ class ControlPanel(QWidget):
         display_layout.addWidget(self.show_edges_check)
         display_group.setLayout(display_layout)
         layout.addWidget(display_group)
+        
+        
+        self.show_original_check.stateChanged.connect(lambda: self.display_option_changed.emit())
+        self.show_processed_check.stateChanged.connect(lambda: self.display_option_changed.emit())
+        self.show_edges_check.stateChanged.connect(lambda: self.display_option_changed.emit())
         
         # 检测按钮
         self.detect_button = QPushButton("开始检测")
@@ -131,7 +161,7 @@ class ControlPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         
         label_widget = QLabel(label)
-        label_widget.setFixedWidth(80)
+        label_widget.setFixedWidth(100)
         
         slider = QSlider(Qt.Horizontal)
         slider.setMinimum(min_val)
@@ -171,7 +201,7 @@ class ControlPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         
         label_widget = QLabel(label)
-        label_widget.setFixedWidth(80)
+        label_widget.setFixedWidth(100)
         
         spin = QDoubleSpinBox()
         spin.setMinimum(min_val)
@@ -209,17 +239,31 @@ class ControlPanel(QWidget):
             'canny_high': self.canny_high_slider.findChild(QSlider).value(),
             'hough_threshold': self.hough_slider.findChild(QSlider).value(),
             'min_line_length': self.min_length_slider.findChild(QSlider).value(),
+            'max_line_gap': self.max_gap_slider.findChild(QSlider).value(),
+            'angle_tolerance': self.angle_tolerance_slider.findChild(QSlider).value(),
         }
     
     def set_params(self, params: Dict[str, Any]):
         """设置参数"""
         if 'blur_kernel_size' in params:
-            self.blur_slider.findChild(QSlider).setValue(params['blur_kernel_size'])
+            self.blur_slider.findChild(QSlider).setValue(int(params['blur_kernel_size']))
         if 'canny_low' in params:
-            self.canny_low_slider.findChild(QSlider).setValue(params['canny_low'])
+            self.canny_low_slider.findChild(QSlider).setValue(int(params['canny_low']))
         if 'canny_high' in params:
-            self.canny_high_slider.findChild(QSlider).setValue(params['canny_high'])
+            self.canny_high_slider.findChild(QSlider).setValue(int(params['canny_high']))
         if 'hough_threshold' in params:
-            self.hough_slider.findChild(QSlider).setValue(params['hough_threshold'])
+            self.hough_slider.findChild(QSlider).setValue(int(params['hough_threshold']))
         if 'min_line_length' in params:
-            self.min_length_slider.findChild(QSlider).setValue(params['min_line_length'])
+            self.min_length_slider.findChild(QSlider).setValue(int(params['min_line_length']))
+        if 'max_line_gap' in params:
+            self.max_gap_slider.findChild(QSlider).setValue(int(params['max_line_gap']))
+        if 'angle_tolerance' in params:
+            self.angle_tolerance_slider.findChild(QSlider).setValue(int(params['angle_tolerance']))
+    
+    def get_display_options(self) -> Dict[str, bool]:
+        """获取显示选项状态"""
+        return {
+            'show_original': self.show_original_check.isChecked(),
+            'show_processed': self.show_processed_check.isChecked(),
+            'show_edges': self.show_edges_check.isChecked(),
+        }

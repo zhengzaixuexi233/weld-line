@@ -151,3 +151,7 @@ output/
 *.yaml.bak
 
 .git/credentials
+
+# Git credentials
+.git/credentials
+*.bat
