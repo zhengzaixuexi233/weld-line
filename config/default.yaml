@@ -1,0 +1,29 @@
+# 焊缝识别系统配置文件
+
+# 预处理参数
+preprocessing:
+  blur_kernel_size: 5
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+# 检测参数
+detection:
+  canny_low: 50
+  canny_high: 150
+  hough_threshold: 50
+  min_line_length: 50
+  max_line_gap: 10
+  angle_tolerance: 15.0
+
+# 显示参数
+display:
+  line_color: [0, 255, 0]
+  line_thickness: 2
+  show_original: true
+  show_processed: true
+
+# 输入源
+input:
+  default_source: "camera"
+  camera_id: 0
+  video_fps: 30

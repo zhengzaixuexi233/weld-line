@@ -1,0 +1,104 @@
+# 焊缝识别系统
+
+基于纯视觉方案的焊缝识别系统，使用Python和OpenCV实现，支持照片、视频和摄像头输入。
+
+## 功能特性
+
+- **多种输入源支持**：图像文件、视频文件、摄像头实时捕获
+- **直线焊缝检测**：基于霍夫变换的直线检测算法
+- **实时处理**：支持视频流实时检测
+- **GUI界面**：友好的图形用户界面
+- **参数可调**：支持运行时调整检测参数
+- **配置管理**：YAML配置文件管理
+
+## 安装
+
+### 环境要求
+
+- Python 3.8+
+- OpenCV 4.x
+- PyQt5
+
+### 安装步骤
+
+1. 克隆仓库
+```bash
+git clone <repository-url>
+cd weld-line
+```
+
+2. 创建虚拟环境（推荐）
+```bash
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# Linux/Mac
+source venv/bin/activate
+```
+
+3. 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+## 使用方法
+
+### 启动GUI
+
+```bash
+python main.py
+```
+
+### 使用步骤
+
+1. 选择输入源（摄像头/视频/图像）
+2. 调整检测参数
+3. 点击"开始检测"
+4. 查看检测结果
+
+### 配置文件
+
+配置文件位于 `config/default.yaml`，包含以下参数：
+
+- **预处理参数**：模糊核大小、CLAHE对比度限制
+- **检测参数**：Canny阈值、霍夫变换参数
+- **显示参数**：线条颜色、粗细
+- **输入源**：默认源、摄像头ID、帧率
+
+## 项目结构
+
+```
+weld-line/
+├── src/                    # 源代码
+│   ├── core/               # 核心检测算法
+│   ├── input_sources/      # 输入源处理
+│   ├── gui/                # GUI界面
+│   ├── config/             # 配置管理
+│   └── utils/              # 工具函数
+├── config/                 # 配置文件
+├── data/                   # 测试数据
+├── tests/                  # 测试代码
+├── main.py                 # 主入口
+├── requirements.txt        # 依赖
+└── README.md               # 说明文档
+```
+
+## 技术栈
+
+- **Python 3.8+**
+- **OpenCV 4.x**：图像处理和计算机视觉
+- **NumPy**：数值计算
+- **PyQt5**：GUI框架
+- **PyYAML**：配置文件管理
+
+## 后续计划
+
+- [ ] 曲线焊缝检测
+- [ ] 深度学习模型集成
+- [ ] 标注文件生成（JSON、COCO、VOC）
+- [ ] 多焊缝同时检测
+- [ ] 3D定位支持
+
+## 许可证
+
+MIT License
