@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFileDialog, QStatusBar, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent
 from typing import Optional
 
 from .controls import ControlPanel
@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
         self._last_frame = None
         self._last_result = None
         self._last_edges = None
+        self.setAcceptDrops(True)
         self._init_ui()
         self._load_config()
         self._setup_timer()
@@ -57,6 +58,14 @@ class MainWindow(QMainWindow):
         self.edges_label.setStyleSheet("border: 1px solid gray;")
         self.edges_label.hide()
         
+        self.drop_overlay = QLabel("拖放图片/视频文件到此处", self)
+        self.drop_overlay.setAlignment(Qt.AlignCenter)
+        self.drop_overlay.setStyleSheet(
+            "background-color: rgba(0, 120, 215, 160);"
+            "color: white; font-size: 22px; font-weight: bold;"
+            "border: 3px dashed white; border-radius: 12px;")
+        self.drop_overlay.hide()
+
         display_layout.addWidget(self.original_label)
         display_layout.addWidget(self.result_label)
         display_layout.addWidget(self.edges_label)
@@ -104,56 +113,47 @@ class MainWindow(QMainWindow):
         self.stop_detection()
         if source == "camera":
             self.current_source = CameraSource()
-            self._update_browse_buttons(False, False)
-        elif source == "image":
-            data_dir = Path(__file__).resolve().parents[3] / "data" / "images"
-            if data_dir.exists():
-                self.image_list = ImageSource.list_images(data_dir)
-                if self.image_list:
-                    self.current_image_index = 0
-                    self.current_source = ImageSource(str(self.image_list[0]))
-                    self.statusBar().showMessage(f"已自动加载: {self.image_list[0].name} (1/{len(self.image_list)})")
-                    self._update_browse_buttons(False, len(self.image_list) > 1)
-                else:
-                    self.current_source = None
-                    self.image_list = []
-                    self.statusBar().showMessage("data/images 目录为空，请放入图片")
-                    self._update_browse_buttons(False, False)
-            else:
-                self.current_source = None
-                self.image_list = []
-                self.statusBar().showMessage("data/images 目录不存在")
-                self._update_browse_buttons(False, False)
-        else:
-            self._update_browse_buttons(False, False)
     
-    def _update_browse_buttons(self, has_prev, has_next):
-        """更新浏览按钮状态"""
-        self.control_panel.prev_button.setEnabled(has_prev)
-        self.control_panel.next_button.setEnabled(has_next)
-    
+    @pyqtSlot()
+    def _on_file_select(self):
+        current_source = self.control_panel.source_combo.currentText()
+        if current_source == "视频文件":
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "选择视频文件", "",
+                "视频文件 (*.mp4 *.avi *.mov *.mkv);;所有文件 (*)")
+            if file_path:
+                self.current_source = VideoSource(file_path)
+                self.statusBar().showMessage(f"已加载视频: {file_path}")
+        elif current_source == "图像文件":
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "选择图像文件", "",
+                "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
+            if file_path:
+                self.current_source = ImageSource(file_path)
+                self.statusBar().showMessage(f"已加载图像: {file_path}")
+
     @pyqtSlot()
     def _on_prev_image(self):
         if not self.image_list or self.current_image_index <= 0:
             return
-        self.stop_detection()
         self.current_image_index -= 1
-        self.current_source = ImageSource(str(self.image_list[self.current_image_index]))
-        self.statusBar().showMessage(f"已加载: {self.image_list[self.current_image_index].name} ({self.current_image_index + 1}/{len(self.image_list)})")
-        self._update_browse_buttons(self.current_image_index > 0, self.current_image_index < len(self.image_list) - 1)
-        # 自动显示图片
-        frame = self.current_source.get_frame()
-        if frame is not None:
-            self._display_image(frame, self.original_label)
+        self._load_image_at_index()
     
     @pyqtSlot()
     def _on_next_image(self):
         if not self.image_list or self.current_image_index >= len(self.image_list) - 1:
             return
-        self.stop_detection()
         self.current_image_index += 1
-        self.current_source = ImageSource(str(self.image_list[self.current_image_index]))
-        self.statusBar().showMessage(f"已加载: {self.image_list[self.current_image_index].name} ({self.current_image_index + 1}/{len(self.image_list)})")
+        self._load_image_at_index()
+    
+    def _load_image_at_index(self):
+        if not self.image_list or self.current_image_index >= len(self.image_list):
+            return
+        self.stop_detection()
+        img_path = self.image_list[self.current_image_index]
+        self.current_source = ImageSource(str(img_path))
+        self.statusBar().showMessage(
+            f"图片: {img_path.name} ({self.current_image_index + 1}/{len(self.image_list)})")
         self._update_browse_buttons(self.current_image_index > 0, self.current_image_index < len(self.image_list) - 1)
         # 自动显示图片
         frame = self.current_source.get_frame()
@@ -215,6 +215,9 @@ class MainWindow(QMainWindow):
                 frame = self.current_source.get_frame()
                 if frame is not None:
                     self._display_image(frame, self.original_label)
+    def _update_browse_buttons(self, has_prev, has_next):
+        self.control_panel.prev_button.setEnabled(has_prev)
+        self.control_panel.next_button.setEnabled(has_next)
     
     def start_detection(self):
         if self.current_source is None:
@@ -279,3 +282,50 @@ class MainWindow(QMainWindow):
         if self.current_source:
             self.current_source.release()
         event.accept()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.drop_overlay.resize(self.centralWidget().size())
+
+    # ---------- 拖放支持 ----------
+
+    _SUPPORTED_IMAGE = ImageSource.SUPPORTED_FORMATS
+    _SUPPORTED_VIDEO = VideoSource.SUPPORTED_FORMATS
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                suffix = Path(url.toLocalFile()).suffix.lower()
+                if suffix in self._SUPPORTED_IMAGE or suffix in self._SUPPORTED_VIDEO:
+                    event.acceptProposedAction()
+                    self.drop_overlay.show()
+                    self.drop_overlay.raise_()
+                    return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.drop_overlay.hide()
+
+    def dropEvent(self, event: QDropEvent):
+        self.drop_overlay.hide()
+        for url in event.mimeData().urls():
+            file_path = Path(url.toLocalFile())
+            if not file_path.exists():
+                continue
+            suffix = file_path.suffix.lower()
+            if suffix in self._SUPPORTED_IMAGE:
+                self.stop_detection()
+                self.current_source = ImageSource(str(file_path))
+                self._display_image(self.current_source.get_frame(), self.original_label)
+                self.control_panel.source_combo.setCurrentText("图像文件")
+                self.statusBar().showMessage(f"已拖入图像: {file_path.name}")
+                event.acceptProposedAction()
+                return
+            if suffix in self._SUPPORTED_VIDEO:
+                self.stop_detection()
+                self.current_source = VideoSource(str(file_path))
+                self.control_panel.source_combo.setCurrentText("视频文件")
+                self.statusBar().showMessage(f"已拖入视频: {file_path.name}")
+                event.acceptProposedAction()
+                return
+        event.ignore()
