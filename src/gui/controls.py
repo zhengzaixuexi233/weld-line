@@ -31,6 +31,10 @@ class ControlPanel(QWidget):
     next_image_clicked = pyqtSignal()
     display_option_changed = pyqtSignal()
     reset_params_clicked = pyqtSignal()
+    profile_changed = pyqtSignal(str)      # 参数模板切换
+    new_profile_clicked = pyqtSignal()      # 新建参数模板
+    save_profile_clicked = pyqtSignal()    # 保存参数模板
+    delete_profile_clicked = pyqtSignal()  # 删除参数模板
     
     def __init__(self, parent=None):
         """初始化控制面板"""
@@ -86,11 +90,36 @@ class ControlPanel(QWidget):
         preproc_layout.addWidget(self.clahe_slider)
         preproc_group.setLayout(preproc_layout)
         layout.addWidget(preproc_group)
-        
+
         # 检测参数
         detect_group = QGroupBox("检测参数")
         detect_layout = QVBoxLayout()
-        
+
+        # 参数模板（嵌入检测参数顶部）
+        profile_layout = QHBoxLayout()
+        profile_layout.setSpacing(6)
+        self.profile_combo = QComboBox()
+        self.profile_combo.setEditable(True)
+        self.profile_combo.currentTextChanged.connect(self.profile_changed.emit)
+        self.new_profile_button = QPushButton("新建")
+        self.new_profile_button.clicked.connect(self.new_profile_clicked.emit)
+        self.save_profile_button = QPushButton("保存")
+        self.save_profile_button.clicked.connect(self.save_profile_clicked.emit)
+        self.delete_profile_button = QPushButton("删除")
+        self.delete_profile_button.clicked.connect(self.delete_profile_clicked.emit)
+        self.new_profile_button.setFixedWidth(55)
+        self.save_profile_button.setFixedWidth(55)
+        self.delete_profile_button.setFixedWidth(55)
+        right_layout = QHBoxLayout()
+        right_layout.setSpacing(4)
+        right_layout.addWidget(self.new_profile_button)
+        right_layout.addWidget(self.save_profile_button)
+        right_layout.addWidget(self.delete_profile_button)
+        profile_layout.addWidget(QLabel("模板:"))
+        profile_layout.addWidget(self.profile_combo, 1)
+        profile_layout.addLayout(right_layout)
+        detect_layout.addLayout(profile_layout)
+
         self.canny_low_slider = self._create_slider(
             "Canny低阈值", 0, 255, 50, 5
         )
@@ -286,3 +315,21 @@ class ControlPanel(QWidget):
             'show_processed': self.show_processed_check.isChecked(),
             'show_edges': self.show_edges_check.isChecked(),
         }
+
+    def set_profiles(self, names: list, current: str = None):
+        """设置参数模板列表
+        
+        Args:
+            names: 模板名称列表
+            current: 当前选中的模板名称
+        """
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        self.profile_combo.addItems(names)
+        if current and current in names:
+            self.profile_combo.setCurrentText(current)
+        self.profile_combo.blockSignals(False)
+
+    def get_current_profile(self) -> str:
+        """获取当前选中的参数模板名称"""
+        return self.profile_combo.currentText()

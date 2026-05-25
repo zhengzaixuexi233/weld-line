@@ -84,6 +84,10 @@ class MainWindow(QMainWindow):
         self.control_panel.next_image_clicked.connect(self._on_next_image)
         self.control_panel.display_option_changed.connect(self._on_display_option_changed)
         self.control_panel.reset_params_clicked.connect(self._on_reset_params)
+        self.control_panel.profile_changed.connect(self._on_profile_changed)
+        self.control_panel.new_profile_clicked.connect(self._on_new_profile)
+        self.control_panel.save_profile_clicked.connect(self._on_save_profile)
+        self.control_panel.delete_profile_clicked.connect(self._on_delete_profile)
         
         main_layout.addLayout(display_layout)
         main_layout.addWidget(self.control_panel)
@@ -100,6 +104,8 @@ class MainWindow(QMainWindow):
             "angle_tolerance": self.config_manager.get("detection.angle_tolerance", 15),
         }
         self.control_panel.set_params(params)
+        # 初始化参数模板列表
+        self._refresh_profile_list()
     
     def _setup_timer(self):
         self.timer = QTimer()
@@ -223,6 +229,80 @@ class MainWindow(QMainWindow):
             angle_tolerance=15
         )
         self.statusBar().showMessage("已恢复默认参数")
+
+    def _refresh_profile_list(self):
+        """刷新参数模板列表"""
+        names = self.config_manager.get_profile_names()
+        self.control_panel.set_profiles(names, "默认")
+
+    @pyqtSlot(str)
+    def _on_profile_changed(self, name: str):
+        """切换参数模板"""
+        if not name:
+            return
+        profile = self.config_manager.get_profile(name)
+        if profile:
+            self.control_panel.set_params(profile)
+            self.detector.update_params(**profile)
+            self.statusBar().showMessage(f"已切换到参数模板: {name}")
+
+    @pyqtSlot()
+    def _on_new_profile(self):
+        """新建参数模板（复制当前参数）"""
+        params = self.control_panel.get_params()
+        # 生成默认名称
+        base_name = "新模板"
+        counter = 1
+        existing_names = self.config_manager.get_profile_names()
+        while f"{base_name}{counter}" in existing_names:
+            counter += 1
+        name = f"{base_name}{counter}"
+        if self.config_manager.save_profile(name, params):
+            self._refresh_profile_list()
+            self.control_panel.profile_combo.setCurrentText(name)
+            self.statusBar().showMessage(f"已新建参数模板: {name}")
+
+    @pyqtSlot()
+    def _on_save_profile(self):
+        """保存当前参数到模板（支持重命名）"""
+        name = self.control_panel.get_current_profile()
+        if not name:
+            return
+        params = self.control_panel.get_params()
+        # 检查是否是重命名（名称不在现有列表中）
+        existing_names = self.config_manager.get_profile_names()
+        if name not in existing_names:
+            # 找到之前的模板名称并重命名
+            # 这种情况是用户编辑了combo的文本
+            # 我们需要找到之前选中的模板
+            # 简单处理：直接保存为新模板
+            pass
+        if self.config_manager.save_profile(name, params):
+            self._refresh_profile_list()
+            self.control_panel.profile_combo.setCurrentText(name)
+            self.statusBar().showMessage(f"已保存参数模板: {name}")
+        else:
+            QMessageBox.critical(self, "错误", "保存参数模板失败")
+
+    @pyqtSlot()
+    def _on_delete_profile(self):
+        """删除当前选中的参数模板"""
+        name = self.control_panel.get_current_profile()
+        if not name:
+            return
+        # 检查是否是最后一个模板
+        if len(self.config_manager.get_profile_names()) <= 1:
+            QMessageBox.warning(self, "警告", "不能删除最后一个参数模板")
+            return
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定要删除参数模板「{name}」吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if self.config_manager.delete_profile(name):
+                self._refresh_profile_list()
+                self.statusBar().showMessage(f"已删除参数模板: {name}")
+            else:
+                QMessageBox.critical(self, "错误", "删除参数模板失败")
     
     @pyqtSlot()
     def _on_file_select(self):

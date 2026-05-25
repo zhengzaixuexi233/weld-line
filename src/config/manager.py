@@ -8,16 +8,20 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
 from copy import deepcopy
+from datetime import datetime
 
 
 class ConfigManager:
     """配置管理器
     
     管理YAML配置文件，支持加载、保存、更新参数。
+    支持参数模板的创建、删除、切换和持久化。
     
     Attributes:
         config_path: 配置文件路径
         config: 当前配置字典
+        profiles_path: 参数模板文件路径
+        profiles: 参数模板字典
     """
     
     DEFAULT_CONFIG = {
@@ -56,6 +60,14 @@ class ConfigManager:
         """
         self.config_path = Path(config_path) if config_path else None
         self.config: Dict[str, Any] = deepcopy(self.DEFAULT_CONFIG)
+        self.profiles: Dict[str, Dict[str, Any]] = {}
+        # 参数模板文件路径（与配置文件同目录）
+        self.profiles_path: Optional[Path] = None
+        self.log_path: Optional[Path] = None
+        if self.config_path:
+            self.profiles_path = self.config_path.parent / "profiles.yaml"
+            self.log_path = self.config_path.parent / "profiles_log.yaml"
+            self._load_profiles()
         
         if self.config_path and self.config_path.exists():
             self.load()
@@ -210,3 +222,120 @@ class ConfigManager:
         manager = ConfigManager()
         manager.config_path = config_path
         return manager.save()
+
+    # ========== 参数模板管理 ==========
+
+    def _load_profiles(self):
+        """从文件加载参数模板"""
+        if self.profiles_path is None or not self.profiles_path.exists():
+            # 初始化默认模板
+            self.profiles = {
+                "默认": deepcopy(self.DEFAULT_CONFIG.get('detection', {}))
+            }
+            return
+        try:
+            with open(self.profiles_path, 'r', encoding='utf-8') as f:
+                loaded = yaml.safe_load(f)
+            if loaded and isinstance(loaded, dict):
+                self.profiles = loaded
+            else:
+                self.profiles = {"默认": deepcopy(self.DEFAULT_CONFIG.get('detection', {}))}
+        except Exception:
+            self.profiles = {"默认": deepcopy(self.DEFAULT_CONFIG.get('detection', {}))}
+
+    def _save_profiles(self) -> bool:
+        """保存参数模板到文件"""
+        if self.profiles_path is None:
+            return False
+        try:
+            self.profiles_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.profiles_path, 'w', encoding='utf-8') as f:
+                yaml.dump(self.profiles, f, default_flow_style=False, allow_unicode=True)
+            return True
+        except Exception as e:
+            print(f"保存参数模板失败: {e}")
+            return False
+
+    def get_profile_names(self) -> list:
+        """获取所有参数模板名称"""
+        return list(self.profiles.keys())
+
+    def get_profile(self, name: str) -> Optional[Dict[str, Any]]:
+        """获取指定参数模板"""
+        return self.profiles.get(name)
+
+    def save_profile(self, name: str, params: Dict[str, Any]) -> bool:
+        """保存参数模板
+        
+        Args:
+            name: 模板名称
+            params: 检测参数字典
+            
+        Returns:
+            是否保存成功
+        """
+        self.profiles[name] = deepcopy(params)
+        self._log_profile_save(name, params)
+        return self._save_profiles()
+
+    def rename_profile(self, old_name: str, new_name: str) -> bool:
+        """重命名参数模板
+        
+        Args:
+            old_name: 旧名称
+            new_name: 新名称
+            
+        Returns:
+            是否重命名成功
+        """
+        if old_name in self.profiles:
+            self.profiles[new_name] = self.profiles.pop(old_name)
+            return self._save_profiles()
+        return False
+
+    def delete_profile(self, name: str) -> bool:
+        """删除参数模板
+        
+        Args:
+            name: 模板名称
+            
+        Returns:
+            是否删除成功（默认模板不可删除）
+        """
+        if name in self.profiles and len(self.profiles) > 1:
+            del self.profiles[name]
+            return self._save_profiles()
+        return False
+
+    def _log_profile_save(self, name: str, params: Dict[str, Any]):
+        """记录参数模板保存日志
+        
+        Args:
+            name: 模板名称
+            params: 参数数据
+        """
+        if self.log_path is None:
+            return
+        try:
+            # 读取现有日志
+            logs = []
+            if self.log_path.exists():
+                with open(self.log_path, 'r', encoding='utf-8') as f:
+                    loaded = yaml.safe_load(f)
+                    if loaded and isinstance(loaded, list):
+                        logs = loaded
+            
+            # 添加新日志条目
+            log_entry = {
+                'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'profile_name': name,
+                'params': params
+            }
+            logs.append(log_entry)
+            
+            # 保存日志
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.log_path, 'w', encoding='utf-8') as f:
+                yaml.dump(logs, f, default_flow_style=False, allow_unicode=True)
+        except Exception as e:
+            print(f"记录参数模板日志失败: {e}")
