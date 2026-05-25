@@ -30,6 +30,7 @@ class ControlPanel(QWidget):
     prev_image_clicked = pyqtSignal()
     next_image_clicked = pyqtSignal()
     display_option_changed = pyqtSignal()
+    reset_params_clicked = pyqtSignal()
     
     def __init__(self, parent=None):
         """初始化控制面板"""
@@ -144,6 +145,11 @@ class ControlPanel(QWidget):
         self.detect_button = QPushButton("开始检测")
         self.detect_button.clicked.connect(self.detect_clicked.emit)
         layout.addWidget(self.detect_button)
+
+        # 恢复默认参数按钮
+        self.reset_button = QPushButton("恢复默认参数")
+        self.reset_button.clicked.connect(self.reset_params_clicked.emit)
+        layout.addWidget(self.reset_button)
         
         layout.addStretch()
     
@@ -259,6 +265,19 @@ class ControlPanel(QWidget):
             self.max_gap_slider.findChild(QSlider).setValue(int(params['max_line_gap']))
         if 'angle_tolerance' in params:
             self.angle_tolerance_slider.findChild(QSlider).setValue(int(params['angle_tolerance']))
+
+    def reset_to_defaults(self):
+        """重置所有参数为默认值"""
+        defaults = {
+            'blur_kernel_size': 5,
+            'canny_low': 50,
+            'canny_high': 150,
+            'hough_threshold': 50,
+            'min_line_length': 50,
+            'max_line_gap': 10,
+            'angle_tolerance': 15,
+        }
+        self.set_params(defaults)
     
     def get_display_options(self) -> Dict[str, bool]:
         """获取显示选项状态"""

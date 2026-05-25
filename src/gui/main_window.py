@@ -29,10 +29,13 @@ class MainWindow(QMainWindow):
         self._last_frame = None
         self._last_result = None
         self._last_edges = None
+        self._is_drop_action = False  # 标记是否正在执行拖放操作
         self.setAcceptDrops(True)
         self._init_ui()
         self._load_config()
         self._setup_timer()
+        # 默认初始化摄像头源
+        self._on_source_changed("camera")
     
     def _init_ui(self):
         self.setWindowTitle("焊缝识别系统")
@@ -80,6 +83,7 @@ class MainWindow(QMainWindow):
         self.control_panel.prev_image_clicked.connect(self._on_prev_image)
         self.control_panel.next_image_clicked.connect(self._on_next_image)
         self.control_panel.display_option_changed.connect(self._on_display_option_changed)
+        self.control_panel.reset_params_clicked.connect(self._on_reset_params)
         
         main_layout.addLayout(display_layout)
         main_layout.addWidget(self.control_panel)
@@ -100,6 +104,17 @@ class MainWindow(QMainWindow):
     def _setup_timer(self):
         self.timer = QTimer()
         self.timer.timeout.connect(self._process_frame)
+        # 摄像头预览定时器（检测前显示原始画面）
+        self.preview_timer = QTimer()
+        self.preview_timer.timeout.connect(self._update_camera_preview)
+
+    def _update_camera_preview(self):
+        """摄像头预览：检测前显示原始画面"""
+        if self.current_source is None or not isinstance(self.current_source, CameraSource):
+            return
+        frame = self.current_source.get_frame()
+        if frame is not None:
+            self._display_image(frame, self.original_label)
     
     @pyqtSlot()
     def _on_detect_clicked(self):
@@ -111,26 +126,29 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _on_source_changed(self, source):
         self.stop_detection()
+        self.preview_timer.stop()
         if source == "camera":
             self.current_source = CameraSource()
-    
-    @pyqtSlot()
-    def _on_file_select(self):
-        current_source = self.control_panel.source_combo.currentText()
-        if current_source == "视频文件":
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "选择视频文件", "",
-                "视频文件 (*.mp4 *.avi *.mov *.mkv);;所有文件 (*)")
-            if file_path:
-                self.current_source = VideoSource(file_path)
-                self.statusBar().showMessage(f"已加载视频: {file_path}")
-        elif current_source == "图像文件":
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "选择图像文件", "",
-                "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
-            if file_path:
-                self.current_source = ImageSource(file_path)
-                self.statusBar().showMessage(f"已加载图像: {file_path}")
+            # 打开摄像头并开始预览
+            if self.current_source.open():
+                self.preview_timer.start(33)  # ~30fps 预览
+                self.statusBar().showMessage("摄像头已打开，点击「开始检测」进行焊缝检测")
+            else:
+                self.statusBar().showMessage("无法打开摄像头")
+        elif source == "image":
+            # 自动扫描 data/images 目录
+            images_dir = Path(__file__).resolve().parents[2] / "data" / "images"
+            if images_dir.exists():
+                self.image_list = ImageSource.list_images(images_dir)
+                if self.image_list:
+                    self.current_image_index = 0
+                    self._load_image_at_index()
+                    self.statusBar().showMessage(
+                        f"已加载 {len(self.image_list)} 张图片 (目录: {images_dir.name})")
+                else:
+                    self.statusBar().showMessage(f"data/images 目录为空，请放入图片")
+            else:
+                 self.statusBar().showMessage("data/images 目录不存在")
 
     @pyqtSlot()
     def _on_prev_image(self):
@@ -189,6 +207,22 @@ class MainWindow(QMainWindow):
                 self._display_image(self._last_result, self.result_label)
             if options['show_edges']:
                 self._display_image(self._last_edges, self.edges_label)
+
+    @pyqtSlot()
+    def _on_reset_params(self):
+        """恢复默认参数"""
+        self.control_panel.reset_to_defaults()
+        # 同步更新检测器参数
+        self.detector.update_params(
+            blur_kernel_size=5,
+            canny_low=50,
+            canny_high=150,
+            hough_threshold=50,
+            min_line_length=50,
+            max_line_gap=10,
+            angle_tolerance=15
+        )
+        self.statusBar().showMessage("已恢复默认参数")
     
     @pyqtSlot()
     def _on_file_select(self):
@@ -199,22 +233,36 @@ class MainWindow(QMainWindow):
                 "视频文件 (*.mp4 *.avi *.mov *.mkv);;所有文件 (*)")
             if file_path:
                 self.current_source = VideoSource(file_path)
+                # 显示视频第一帧作为预览
+                frame = self.current_source.get_frame()
+                if frame is not None:
+                    self._display_image(frame, self.original_label)
                 self.statusBar().showMessage(f"已加载视频: {file_path}")
         elif current_source == "图像文件":
-            default_dir = str(Path(__file__).resolve().parents[3] / "data" / "images")
+            default_dir = str(Path(__file__).resolve().parents[2] / "data" / "images")
             file_path, _ = QFileDialog.getOpenFileName(
                 self, "选择图像文件", default_dir,
                 "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
             if file_path:
                 self.current_source = ImageSource(file_path)
-                self.image_list = []
+                # 加载同目录下的所有图片以支持浏览
+                file_path_obj = Path(file_path)
+                self.image_list = ImageSource.list_images(file_path_obj.parent)
                 self.current_image_index = 0
-                self._update_browse_buttons(False, False)
+                # 找到选中文件在列表中的位置
+                for idx, img_path in enumerate(self.image_list):
+                    if img_path.resolve() == file_path_obj.resolve():
+                        self.current_image_index = idx
+                        break
+                self._update_browse_buttons(
+                    self.current_image_index > 0,
+                    self.current_image_index < len(self.image_list) - 1)
                 self.statusBar().showMessage(f"已加载图像: {file_path}")
                 # 自动显示图片
                 frame = self.current_source.get_frame()
                 if frame is not None:
                     self._display_image(frame, self.original_label)
+
     def _update_browse_buttons(self, has_prev, has_next):
         self.control_panel.prev_button.setEnabled(has_prev)
         self.control_panel.next_button.setEnabled(has_next)
@@ -228,6 +276,7 @@ class MainWindow(QMainWindow):
                 if not self.current_source.open():
                     QMessageBox.critical(self, "错误", "无法打开摄像头")
                     return
+        self.preview_timer.stop()
         self.is_detecting = True
         self.control_panel.detect_button.setText("停止检测")
         self.statusBar().showMessage("检测中...")
@@ -241,6 +290,9 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.control_panel.detect_button.setText("开始检测")
         self.statusBar().showMessage("已停止")
+        # 如果是摄像头源，恢复预览
+        if isinstance(self.current_source, CameraSource):
+            self.preview_timer.start(33)
     
     def _process_frame(self):
         if not self.is_detecting or self.current_source is None:
@@ -279,6 +331,7 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         self.stop_detection()
+        self.preview_timer.stop()
         if self.current_source:
             self.current_source.release()
         event.accept()
@@ -308,6 +361,7 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, event: QDropEvent):
         self.drop_overlay.hide()
+        self.preview_timer.stop()
         for url in event.mimeData().urls():
             file_path = Path(url.toLocalFile())
             if not file_path.exists():
@@ -317,14 +371,23 @@ class MainWindow(QMainWindow):
                 self.stop_detection()
                 self.current_source = ImageSource(str(file_path))
                 self._display_image(self.current_source.get_frame(), self.original_label)
+                # 用 blockSignals 防止 setCurrentText 触发 _on_source_changed
+                self.control_panel.source_combo.blockSignals(True)
                 self.control_panel.source_combo.setCurrentText("图像文件")
+                self.control_panel.source_combo.blockSignals(False)
                 self.statusBar().showMessage(f"已拖入图像: {file_path.name}")
                 event.acceptProposedAction()
                 return
             if suffix in self._SUPPORTED_VIDEO:
                 self.stop_detection()
                 self.current_source = VideoSource(str(file_path))
+                # 显示视频第一帧作为预览
+                frame = self.current_source.get_frame()
+                if frame is not None:
+                    self._display_image(frame, self.original_label)
+                self.control_panel.source_combo.blockSignals(True)
                 self.control_panel.source_combo.setCurrentText("视频文件")
+                self.control_panel.source_combo.blockSignals(False)
                 self.statusBar().showMessage(f"已拖入视频: {file_path.name}")
                 event.acceptProposedAction()
                 return
