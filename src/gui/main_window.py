@@ -1,4 +1,4 @@
-﻿"""
+"""
 GUI主窗口模块
 """
 import cv2
@@ -6,8 +6,8 @@ import numpy as np
 from pathlib import Path
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFileDialog, QStatusBar, QMessageBox)
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QPointF, QSizeF, QRectF
+from PyQt5.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QCursor, QPainter
 from typing import Optional
 
 from .controls import ControlPanel
@@ -15,6 +15,105 @@ from ..core.detector import WeldDetector
 from ..input_sources import ImageSource, VideoSource, CameraSource
 from ..config.manager import ConfigManager
 from ..utils.visualization import draw_detections
+
+from PyQt5.QtWidgets import QDialog
+from PyQt5.QtCore import pyqtSignal
+
+class ClickableLabel(QLabel):
+    """可点击的QLabel，点击后发射clicked信号"""
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+
+class ScalableImageLabel(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._original_pixmap = None
+        self._zoom_factor = 1.0
+        self._dragging = False
+        self._last_drag_pos = None
+        self._offset = QPointF(0, 0)
+        self.setCursor(QCursor(Qt.OpenHandCursor))
+
+    def setPixmap(self, pixmap):
+        self._original_pixmap = pixmap
+        self._zoom_factor = 1.0
+        self._offset = QPointF(0, 0)
+        self.update()
+
+    def wheelEvent(self, event):
+        if self._original_pixmap is None:
+            return
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self._zoom_factor += 0.25
+        elif delta < 0:
+            self._zoom_factor -= 0.25
+        self._zoom_factor = max(0.8, min(3.0, self._zoom_factor))
+        self._clamp_offset()
+        self.update()
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._original_pixmap is not None:
+            self._dragging = True
+            self._last_drag_pos = event.pos()
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._dragging and self._last_drag_pos is not None:
+            delta = event.pos() - self._last_drag_pos
+            self._offset += QPointF(delta)
+            self._clamp_offset()
+            self._last_drag_pos = event.pos()
+            self.update()
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = False
+            self._last_drag_pos = None
+            self.setCursor(QCursor(Qt.OpenHandCursor))
+            event.accept()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._clamp_offset()
+
+    def paintEvent(self, event):
+        if self._original_pixmap is None or self._original_pixmap.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        scaled_size = self._scaled_size()
+        x = (self.width() - scaled_size.width()) / 2 + self._offset.x()
+        y = (self.height() - scaled_size.height()) / 2 + self._offset.y()
+        painter.drawPixmap(QRectF(x, y, scaled_size.width(), scaled_size.height()), self._original_pixmap, QRectF(self._original_pixmap.rect()))
+
+    def _scaled_size(self):
+        if self._original_pixmap is None or self._original_pixmap.isNull():
+            return QSizeF(0, 0)
+        fit_scale = min(
+            self.width() / self._original_pixmap.width(),
+            self.height() / self._original_pixmap.height()
+        )
+        scale = max(0.01, fit_scale) * self._zoom_factor
+        return QSizeF(
+            self._original_pixmap.width() * scale,
+            self._original_pixmap.height() * scale
+        )
+
+    def _clamp_offset(self):
+        scaled_size = self._scaled_size()
+        max_x = max(0, (scaled_size.width() - self.width()) / 2)
+        max_y = max(0, (scaled_size.height() - self.height()) / 2)
+        x = min(max(self._offset.x(), -max_x), max_x)
+        y = min(max(self._offset.y(), -max_y), max_y)
+        self._offset = QPointF(x, y)
 
 
 class MainWindow(QMainWindow):
@@ -45,21 +144,24 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         
         display_layout = QVBoxLayout()
-        self.original_label = QLabel("原始图像")
+        self.original_label = ClickableLabel("原始图像")
         self.original_label.setAlignment(Qt.AlignCenter)
         self.original_label.setMinimumSize(400, 100)
         self.original_label.setStyleSheet("border: 1px solid gray;")
+        self.original_label.clicked.connect(lambda: self._show_enlarged("original"))
         
-        self.result_label = QLabel("检测结果")
+        self.result_label = ClickableLabel("检测结果")
         self.result_label.setAlignment(Qt.AlignCenter)
         self.result_label.setMinimumSize(400, 100)
         self.result_label.setStyleSheet("border: 1px solid gray;")
+        self.result_label.clicked.connect(lambda: self._show_enlarged("result"))
         
-        self.edges_label = QLabel("边缘图")
+        self.edges_label = ClickableLabel("边缘图")
         self.edges_label.setAlignment(Qt.AlignCenter)
         self.edges_label.setMinimumSize(400, 100)
         self.edges_label.setStyleSheet("border: 1px solid gray;")
         self.edges_label.hide()
+        self.edges_label.clicked.connect(lambda: self._show_enlarged("edges"))
         
         self.drop_overlay = QLabel("拖放图片/视频文件到此处", self)
         self.drop_overlay.setAlignment(Qt.AlignCenter)
@@ -408,6 +510,52 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap.fromImage(q_image)
         scaled_pixmap = pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         label.setPixmap(scaled_pixmap)
+
+    def _show_enlarged(self, image_type: str):
+        """点击图片后放大显示"""
+        # 获取对应的图像
+        image = None
+        title = ""
+        if image_type == "original":
+            image = self._last_frame
+            title = "原始图像"
+        elif image_type == "result":
+            image = self._last_result
+            title = "检测结果"
+        elif image_type == "edges":
+            image = self._last_edges
+            title = "边缘图"
+
+        if image is None:
+            return
+
+        # 创建放大窗口
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(1200, 900)
+        dialog.setStyleSheet("QDialog { border: 3px solid #666; }")
+
+        # 创建图像标签
+        image_label = ScalableImageLabel()
+
+        # 转换图像并显示
+        if len(image.shape) == 2:
+            h, w = image.shape
+            bytes_per_line = w
+            q_image = QImage(image.data, w, h, bytes_per_line, QImage.Format_Grayscale8)
+        else:
+            h, w, ch = image.shape
+            bytes_per_line = ch * w
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            q_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_image)
+        image_label.setPixmap(pixmap)
+
+        # 布局
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(image_label)
+
+        dialog.exec_()
     
     def closeEvent(self, event):
         self.stop_detection()
