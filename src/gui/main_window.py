@@ -47,17 +47,17 @@ class MainWindow(QMainWindow):
         display_layout = QVBoxLayout()
         self.original_label = QLabel("原始图像")
         self.original_label.setAlignment(Qt.AlignCenter)
-        self.original_label.setMinimumSize(400, 300)
+        self.original_label.setMinimumSize(400, 100)
         self.original_label.setStyleSheet("border: 1px solid gray;")
         
         self.result_label = QLabel("检测结果")
         self.result_label.setAlignment(Qt.AlignCenter)
-        self.result_label.setMinimumSize(400, 300)
+        self.result_label.setMinimumSize(400, 100)
         self.result_label.setStyleSheet("border: 1px solid gray;")
         
         self.edges_label = QLabel("边缘图")
         self.edges_label.setAlignment(Qt.AlignCenter)
-        self.edges_label.setMinimumSize(400, 300)
+        self.edges_label.setMinimumSize(400, 100)
         self.edges_label.setStyleSheet("border: 1px solid gray;")
         self.edges_label.hide()
         
@@ -69,9 +69,9 @@ class MainWindow(QMainWindow):
             "border: 3px dashed white; border-radius: 12px;")
         self.drop_overlay.hide()
 
-        display_layout.addWidget(self.original_label)
-        display_layout.addWidget(self.result_label)
-        display_layout.addWidget(self.edges_label)
+        display_layout.addWidget(self.original_label, stretch=1)
+        display_layout.addWidget(self.edges_label, stretch=1)
+        display_layout.addWidget(self.result_label, stretch=1)
         
         self.control_panel = ControlPanel()
         self.control_panel.setFixedWidth(380)

@@ -13,6 +13,138 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from typing import Dict, Any
 
 
+# 参数提示信息字典
+PARAM_TOOLTIPS = {
+    "模糊核大小": (
+        "【作用】控制高斯模糊的降噪强度，是图像预处理的第一步。\n"
+        "  降噪可以减少图像中的随机噪声，避免后续边缘检测产生大量误检。\n"
+        "\n"
+        "【原理】使用高斯核对图像进行卷积运算，每个像素被替换为\n"
+        "  周围像素的加权平均值。核大小决定了参与平均的像素范围：\n"
+        "  核越大，平均范围越广，模糊效果越强，但会丢失细节。\n"
+        "  例如：核大小为5时，每个像素参考周围5×5区域的信息。\n"
+        "\n"
+        "【建议】\n"
+        "  • 噪声多的图像：增大到 7-11\n"
+        "  • 清晰图像：保持 3-5\n"
+        "  • 值过大会模糊焊缝细节"
+    ),
+    "CLAHE限制": (
+        "【作用】控制自适应直方图均衡化（CLAHE）的对比度增强强度。\n"
+        "  对比度增强可以使焊缝边缘更加清晰，便于后续检测。\n"
+        "\n"
+        "【原理】CLAHE将图像分成小块（网格），对每块独立进行直方图\n"
+        "  均衡化。clipLimit参数限制了直方图的裁剪高度：\n"
+        "  - 当某灰度级的像素数超过clipLimit时，超出部分会被均匀\n"
+        "    分配到其他灰度级\n"
+        "  - 这样既增强了局部对比度，又避免了噪声被过度放大\n"
+        "  - 全局直方图均衡化会导致整体过亮/过暗，CLAHE解决了这个问题\n"
+        "\n"
+        "【建议】\n"
+        "  • 光线不均匀：增大到 3.0-4.0\n"
+        "  • 正常光照：保持 1.5-2.5\n"
+        "  • 值过大会放大噪声"
+    ),
+    "Canny低阈值": (
+        "【作用】Canny边缘检测的低阈值，用于过滤弱边缘。\n"
+        "  Canny算法通过检测图像灰度梯度的突变来定位边缘。\n"
+        "\n"
+        "【原理】Canny使用双阈值策略：\n"
+        "  - 梯度值 > 高阈值：确定为强边缘\n"
+        "  - 低阈值 < 梯度值 < 高阈值：仅当与强边缘相连时保留\n"
+        "  - 梯度值 < 低阈值：直接丢弃\n"
+        "  低阈值越低，保留的弱边缘越多，可能增加误检；\n"
+        "  低阈值越高，过滤越严格，可能丢失真实边缘。\n"
+        "\n"
+        "【建议】\n"
+        "  • 漏检多：降低到 20-30\n"
+        "  • 误检多：提高到 70-100\n"
+        "  • 通常为高阈值的 1/2 到 1/3"
+    ),
+    "Canny高阈值": (
+        "【作用】Canny边缘检测的高阈值，用于确定强边缘。\n"
+        "  强边缘是确定的边缘点，作为后续边缘连接的种子点。\n"
+        "\n"
+        "【原理】Canny算法使用Sobel算子计算图像的梯度幅值和方向：\n"
+        "  - 梯度幅值表示灰度变化的强度\n"
+        "  - 高阈值用于筛选出最可靠的边缘点（强边缘）\n"
+        "  - 然后通过非极大值抑制细化边缘宽度到1像素\n"
+        "  - 最后通过滞后阈值（双阈值）连接边缘\n"
+        "  高阈值越高，只保留最明显的边缘，可能丢失细节。\n"
+        "\n"
+        "【建议】\n"
+        "  • 漏检多：降低到 100-120\n"
+        "  • 误检多：提高到 200-250\n"
+        "  • 通常为低阈值的 2 到 3 倍"
+    ),
+    "霍夫阈值": (
+        "【作用】霍夫变换检测直线的累加器阈值，决定直线检测的严格程度。\n"
+        "  霍夫变换是将图像空间中的直线转换为参数空间中的点的技术。\n"
+        "\n"
+        "【原理】对于边缘图上的每个点，霍夫变换在参数空间中绘制一条曲线：\n"
+        "  - 参数空间使用极坐标 (ρ, θ) 表示直线\n"
+        "  - 同一条直线上的多个点会在参数空间中交于同一点\n"
+        "  - 交点的累加值（得票数）反映了这条直线的支持程度\n"
+        "  - 阈值决定了需要多少票才认为这是一条有效直线\n"
+        "  使用概率霍夫变换（HoughLinesP）可以得到线段的端点坐标。\n"
+        "\n"
+        "【建议】\n"
+        "  • 漏检多：降低到 30-40\n"
+        "  • 误检多：提高到 70-100\n"
+        "  • 值越高要求越多边缘点支持"
+    ),
+    "最小长度": (
+        "【作用】过滤掉短于此长度的线段，减少噪声线段的干扰。\n"
+        "  霍夫变换可能检测到很多短线段，其中大部分是噪声。\n"
+        "\n"
+        "【原理】计算每条线段两个端点之间的欧几里得距离：\n"
+        "  length = sqrt((x2-x1)² + (y2-y1)²)\n"
+        "  如果线段长度小于min_line_length，则该线段被丢弃。\n"
+        "  这个参数应该根据实际焊缝的预期长度来设置：\n"
+        "  - 如果焊缝较短（如点焊），需要降低此值\n"
+        "  - 如果焊缝较长（如连续焊缝），可以提高此值过滤噪声\n"
+        "\n"
+        "【建议】\n"
+        "  • 检测短线段：降低到 20-30\n"
+        "  • 过滤噪声线段：提高到 80-100\n"
+        "  • 根据实际焊缝长度调整"
+    ),
+    "最大线段间隔": (
+        "【作用】允许合并的线段之间的最大间隔，用于连接断裂的线段。\n"
+        "  由于光照、污渍等原因，一条完整的焊缝可能被检测为多段。\n"
+        "\n"
+        "【原理】在合并线段时，检查两条线段端点之间的最小距离：\n"
+        "  - 计算每条线段的中点坐标\n"
+        "  - 计算两个中点之间的欧几里得距离\n"
+        "  - 如果距离 < max_line_gap，且角度差在容差范围内，\n"
+        "    则将两条线段合并为一条\n"
+        "  合并后的线段取最远的两个端点作为新线段的端点。\n"
+        "\n"
+        "【建议】\n"
+        "  • 焊缝断裂多：增大到 15-20\n"
+        "  • 需要精确线段：降低到 5-8\n"
+        "  • 值过大会合并无关线段"
+    ),
+    "角度容差": (
+        "【作用】线段合并时允许的角度偏差范围，控制方向一致性。\n"
+        "  焊缝通常是直线或平滑曲线，方向变化不会太大。\n"
+        "\n"
+        "【原理】计算两条线段的夹角差：\n"
+        "  - 每条线段的角度 = arctan2(dy, dx)，范围[-180°, 180°]\n"
+        "  - 角度差 = |angle1 - angle2|\n"
+        "  - 如果角度差 > 180°，则取 360° - 角度差\n"
+        "  - 只有角度差 ≤ angle_tolerance 时，才考虑合并\n"
+        "  这确保了只有方向相近的线段才会被合并，\n"
+        "  避免将不同方向的线段错误地连接在一起。\n"
+        "\n"
+        "【建议】\n"
+        "  • 严格水平/垂直焊缝：保持 10-15 度\n"
+        "  • 倾斜或弯曲焊缝：增大到 20-30 度\n"
+        "  • 值过大会合并不同方向的线段"
+    ),
+}
+
+
 class ControlPanel(QWidget):
     """控制面板
     
@@ -80,10 +212,12 @@ class ControlPanel(QWidget):
         preproc_layout = QVBoxLayout()
         
         self.blur_slider = self._create_slider(
-            "模糊核大小", 1, 31, 5, 2
+            "模糊核大小", 1, 31, 5, 2,
+            tooltip=PARAM_TOOLTIPS.get("模糊核大小")
         )
         self.clahe_slider = self._create_double_slider(
-            "CLAHE限制", 0.1, 10.0, 2.0, 0.1
+            "CLAHE限制", 0.1, 10.0, 2.0, 0.1,
+            tooltip=PARAM_TOOLTIPS.get("CLAHE限制")
         )
         
         preproc_layout.addWidget(self.blur_slider)
@@ -121,22 +255,28 @@ class ControlPanel(QWidget):
         detect_layout.addLayout(profile_layout)
 
         self.canny_low_slider = self._create_slider(
-            "Canny低阈值", 0, 255, 50, 5
+            "Canny低阈值", 0, 255, 50, 5,
+            tooltip=PARAM_TOOLTIPS.get("Canny低阈值")
         )
         self.canny_high_slider = self._create_slider(
-            "Canny高阈值", 0, 255, 150, 5
+            "Canny高阈值", 0, 255, 150, 5,
+            tooltip=PARAM_TOOLTIPS.get("Canny高阈值")
         )
         self.hough_slider = self._create_slider(
-            "霍夫阈值", 1, 200, 50, 5
+            "霍夫阈值", 1, 200, 50, 5,
+            tooltip=PARAM_TOOLTIPS.get("霍夫阈值")
         )
         self.min_length_slider = self._create_slider(
-            "最小长度", 10, 500, 50, 10
+            "最小长度", 10, 500, 50, 10,
+            tooltip=PARAM_TOOLTIPS.get("最小长度")
         )
         self.max_gap_slider = self._create_slider(
-            "最大线段间隔", 1, 100, 10, 1
+            "最大线段间隔", 1, 100, 10, 1,
+            tooltip=PARAM_TOOLTIPS.get("最大线段间隔")
         )
         self.angle_tolerance_slider = self._create_slider(
-            "角度容差", 1, 90, 15, 1
+            "角度容差", 1, 90, 15, 1,
+            tooltip=PARAM_TOOLTIPS.get("角度容差")
         )
         
         detect_layout.addWidget(self.canny_low_slider)
@@ -188,7 +328,8 @@ class ControlPanel(QWidget):
         min_val: int,
         max_val: int,
         default: int,
-        step: int = 1
+        step: int = 1,
+        tooltip: str = None
     ) -> QWidget:
         """创建滑块控件"""
         widget = QWidget()
@@ -197,6 +338,10 @@ class ControlPanel(QWidget):
         
         label_widget = QLabel(label)
         label_widget.setFixedWidth(100)
+        
+        # 设置提示信息
+        if tooltip:
+            label_widget.setToolTip(tooltip)
         
         slider = QSlider(Qt.Horizontal)
         slider.setMinimum(min_val)
@@ -228,7 +373,8 @@ class ControlPanel(QWidget):
         min_val: float,
         max_val: float,
         default: float,
-        step: float = 0.1
+        step: float = 0.1,
+        tooltip: str = None
     ) -> QWidget:
         """创建浮点数滑块控件"""
         widget = QWidget()
@@ -237,6 +383,10 @@ class ControlPanel(QWidget):
         
         label_widget = QLabel(label)
         label_widget.setFixedWidth(100)
+        
+        # 设置提示信息
+        if tooltip:
+            label_widget.setToolTip(tooltip)
         
         spin = QDoubleSpinBox()
         spin.setMinimum(min_val)

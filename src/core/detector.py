@@ -212,7 +212,7 @@ class WeldDetector:
         self,
         lines: List[LineSegment],
         distance_threshold: float = 20,
-        angle_threshold: float = 10
+        angle_threshold: Optional[float] = None
     ) -> List[LineSegment]:
         """合并相近的线段
         
@@ -226,7 +226,11 @@ class WeldDetector:
         """
         if not lines:
             return []
-        
+
+        # 使用实例的 angle_tolerance 如果未指定
+        if angle_threshold is None:
+            angle_threshold = self.angle_tolerance
+
         merged = []
         used = [False] * len(lines)
         
