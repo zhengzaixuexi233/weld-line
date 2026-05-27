@@ -1,4 +1,4 @@
-"""
+﻿"""
 GUI主窗口模块
 """
 import cv2
@@ -286,7 +286,7 @@ class MainWindow(QMainWindow):
         frame = self.current_source.get_frame()
         if frame is not None:
             self._display_image(frame, self.original_label)
-            self._detect_current_image_once()
+            self.start_detection()
     
     @pyqtSlot(str, object)
     def _on_param_changed(self, name, value):
@@ -439,6 +439,7 @@ class MainWindow(QMainWindow):
                 self, "选择图像文件", default_dir,
                 "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
             if file_path:
+                self.stop_detection()
                 self.current_source = ImageSource(file_path)
                 # 加载同目录下的所有图片以支持浏览
                 file_path_obj = Path(file_path)
@@ -457,7 +458,7 @@ class MainWindow(QMainWindow):
                 frame = self.current_source.get_frame()
                 if frame is not None:
                     self._display_image(frame, self.original_label)
-                    self._detect_current_image_once()
+                    self.start_detection()
 
     def _update_browse_buttons(self, has_prev, has_next):
         self.control_panel.prev_button.setEnabled(has_prev)
@@ -479,6 +480,8 @@ class MainWindow(QMainWindow):
         fps = 30
         if isinstance(self.current_source, VideoSource):
             fps = self.current_source.get_fps()
+        elif isinstance(self.current_source, ImageSource):
+            fps = 5
         self.timer.start(int(1000 / fps))
     
     def stop_detection(self):
@@ -644,7 +647,7 @@ class MainWindow(QMainWindow):
                     self.current_image_index > 0,
                     self.current_image_index < len(self.image_list) - 1)
                 self._display_image(self.current_source.get_frame(), self.original_label)
-                self._detect_current_image_once()
+                self.start_detection()
                 # 用 blockSignals 防止 setCurrentText 触发 _on_source_changed
                 self.control_panel.source_combo.blockSignals(True)
                 self.control_panel.source_combo.setCurrentText("图像文件")

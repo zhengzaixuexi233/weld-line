@@ -1,6 +1,7 @@
 '333':
   angle_tolerance: 15
   blur_kernel_size: 5
+  clahe_clip_limit: 2.0
   canny_high: 150
   canny_low: 50
   hough_threshold: 131
@@ -9,6 +10,7 @@
 新模板1:
   angle_tolerance: 15
   blur_kernel_size: 5
+  clahe_clip_limit: 2.0
   canny_high: 150
   canny_low: 50
   hough_threshold: 50
@@ -17,6 +19,7 @@
 新模板2:
   angle_tolerance: 15
   blur_kernel_size: 5
+  clahe_clip_limit: 2.0
   canny_high: 150
   canny_low: 50
   hough_threshold: 50
@@ -24,6 +27,8 @@
   min_line_length: 50
 默认:
   angle_tolerance: 15
+  blur_kernel_size: 5
+  clahe_clip_limit: 2.0
   canny_high: 150
   canny_low: 50
   hough_threshold: 50

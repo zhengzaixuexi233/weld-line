@@ -393,7 +393,7 @@ class ControlPanel(QWidget):
         spin.setMaximum(max_val)
         spin.setValue(default)
         spin.setSingleStep(step)
-        spin.setFixedWidth(80)
+        spin.setFixedWidth(60)
         
         spin.valueChanged.connect(
             lambda v, name=label: self.param_changed.emit(name, v)
