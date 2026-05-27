@@ -49,9 +49,9 @@ class ScalableImageLabel(QWidget):
             return
         delta = event.angleDelta().y()
         if delta > 0:
-            self._zoom_factor += 0.25
+            self._zoom_factor += 0.2
         elif delta < 0:
-            self._zoom_factor -= 0.25
+            self._zoom_factor -= 0.2
         self._zoom_factor = max(0.8, min(3.0, self._zoom_factor))
         self._clamp_offset()
         self.update()
@@ -198,6 +198,7 @@ class MainWindow(QMainWindow):
     def _load_config(self):
         params = {
             "blur_kernel_size": self.config_manager.get("preprocessing.blur_kernel_size", 5),
+            "clahe_clip_limit": self.config_manager.get("preprocessing.clahe_clip_limit", 2.0),
             "canny_low": self.config_manager.get("detection.canny_low", 50),
             "canny_high": self.config_manager.get("detection.canny_high", 150),
             "hough_threshold": self.config_manager.get("detection.hough_threshold", 50),
@@ -285,11 +286,13 @@ class MainWindow(QMainWindow):
         frame = self.current_source.get_frame()
         if frame is not None:
             self._display_image(frame, self.original_label)
+            self._detect_current_image_once()
     
     @pyqtSlot(str, object)
     def _on_param_changed(self, name, value):
         param_map = {
             "模糊核大小": "blur_kernel_size",
+            "CLAHE限制": "clahe_clip_limit",
             "Canny低阈值": "canny_low",
             "Canny高阈值": "canny_high",
             "霍夫阈值": "hough_threshold",
@@ -299,6 +302,15 @@ class MainWindow(QMainWindow):
         }
         param_name = param_map.get(name)
         if param_name:
+            if param_name == "blur_kernel_size" and value % 2 == 0:
+                value += 1
+                self.control_panel.set_params({"blur_kernel_size": value})
+            elif param_name == "canny_low" and value >= self.detector.canny_high:
+                value = max(0, self.detector.canny_high - 1)
+                self.control_panel.set_params({"canny_low": value})
+            elif param_name == "canny_high" and value <= self.detector.canny_low:
+                value = min(255, self.detector.canny_low + 1)
+                self.control_panel.set_params({"canny_high": value})
             self.detector.update_params(**{param_name: value})
     
     @pyqtSlot()
@@ -323,6 +335,7 @@ class MainWindow(QMainWindow):
         # 同步更新检测器参数
         self.detector.update_params(
             blur_kernel_size=5,
+            clahe_clip_limit=2.0,
             canny_low=50,
             canny_high=150,
             hough_threshold=50,
@@ -444,6 +457,7 @@ class MainWindow(QMainWindow):
                 frame = self.current_source.get_frame()
                 if frame is not None:
                     self._display_image(frame, self.original_label)
+                    self._detect_current_image_once()
 
     def _update_browse_buttons(self, has_prev, has_next):
         self.control_panel.prev_button.setEnabled(has_prev)
@@ -496,6 +510,27 @@ class MainWindow(QMainWindow):
         if options['show_edges']:
             self._display_image(edges, self.edges_label)
         self.statusBar().showMessage(f"检测到 {len(detections)} 条焊缝")
+
+    def _detect_current_image_once(self):
+        """对静态图片执行一次检测并更新结果视图"""
+        if not isinstance(self.current_source, ImageSource):
+            return
+        frame = self.current_source.get_frame()
+        if frame is None:
+            return
+        detections, processed, edges = self.detector.detect(frame)
+        result_frame = draw_detections(frame, detections)
+        self._last_frame = frame
+        self._last_result = result_frame
+        self._last_edges = edges
+        options = self.control_panel.get_display_options()
+        if options['show_original']:
+            self._display_image(frame, self.original_label)
+        if options['show_processed']:
+            self._display_image(result_frame, self.result_label)
+        if options['show_edges']:
+            self._display_image(edges, self.edges_label)
+        self.statusBar().showMessage(f"检测到 {len(detections)} 条焊缝")
     
     def _display_image(self, image, label):
         if len(image.shape) == 2:
@@ -533,6 +568,7 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setMinimumSize(1200, 900)
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowMaximizeButtonHint)
         dialog.setStyleSheet("QDialog { border: 3px solid #666; }")
 
         # 创建图像标签
@@ -598,7 +634,17 @@ class MainWindow(QMainWindow):
             if suffix in self._SUPPORTED_IMAGE:
                 self.stop_detection()
                 self.current_source = ImageSource(str(file_path))
+                self.image_list = ImageSource.list_images(file_path.parent)
+                self.current_image_index = 0
+                for idx, img_path in enumerate(self.image_list):
+                    if img_path.resolve() == file_path.resolve():
+                        self.current_image_index = idx
+                        break
+                self._update_browse_buttons(
+                    self.current_image_index > 0,
+                    self.current_image_index < len(self.image_list) - 1)
                 self._display_image(self.current_source.get_frame(), self.original_label)
+                self._detect_current_image_once()
                 # 用 blockSignals 防止 setCurrentText 触发 _on_source_changed
                 self.control_panel.source_combo.blockSignals(True)
                 self.control_panel.source_combo.setCurrentText("图像文件")
