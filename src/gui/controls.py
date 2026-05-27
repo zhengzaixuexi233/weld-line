@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QPushButton, QCheckBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import pyqtSlot
+from PyQt5.QtCore import QEvent
 from typing import Dict, Any
 
 
@@ -169,11 +171,20 @@ class ControlPanel(QWidget):
     delete_profile_clicked = pyqtSignal()  # 删除参数模板
     auto_save_toggled = pyqtSignal(bool)   # 自动保存开关
     open_saved_folder = pyqtSignal()       # 打开保存文件夹
+    camera_changed = pyqtSignal(int)       # 摄像头切换
+    open_source_folder = pyqtSignal(str)   # 打开源文件夹 (video/image)
     
     def __init__(self, parent=None):
         """初始化控制面板"""
         super().__init__(parent)
         self._init_ui()
+        self.installEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            if obj is not self.profile_combo.view().viewport() and obj is not self.profile_combo.lineEdit():
+                self.profile_combo.lineEdit().clearFocus()
+        return super().eventFilter(obj, event)
     
     def _init_ui(self):
         """初始化界面"""
@@ -187,19 +198,30 @@ class ControlPanel(QWidget):
         self.source_combo.addItems(["摄像头", "视频文件", "图像文件"])
         self.source_combo.currentTextChanged.connect(self._on_source_changed)
         
-        self.file_button = QPushButton("选择文件")
-        self.file_button.setEnabled(False)
+        self.camera_combo = QComboBox()
+        self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
+        self.camera_combo.hide()
+        
+        self.source_folder_button = QPushButton("📂")
+        self.source_folder_button.setFixedWidth(36)
+        self.source_folder_button.clicked.connect(self._on_open_source_folder)
+        self.source_folder_button.hide()
         
         # 图片浏览按钮
         self.prev_button = QPushButton("上一张")
         self.prev_button.setEnabled(False)
         self.prev_button.clicked.connect(self.prev_image_clicked.emit)
+        self.prev_button.setFocusPolicy(Qt.NoFocus)
         self.next_button = QPushButton("下一张")
         self.next_button.setEnabled(False)
         self.next_button.clicked.connect(self.next_image_clicked.emit)
+        self.next_button.setFocusPolicy(Qt.NoFocus)
         
-        source_layout.addWidget(self.source_combo)
-        source_layout.addWidget(self.file_button)
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.source_combo, 3)
+        source_row.addWidget(self.camera_combo, 1)
+        source_row.addWidget(self.source_folder_button, 0)
+        source_layout.addLayout(source_row)
         
         browse_layout = QHBoxLayout()
         browse_layout.addWidget(self.prev_button)
@@ -287,6 +309,7 @@ class ControlPanel(QWidget):
         # 恢复默认参数（最下面）
         self.reset_button = QPushButton("恢复默认参数")
         self.reset_button.clicked.connect(self.reset_params_clicked.emit)
+        self.reset_button.clicked.connect(lambda: self.profile_combo.lineEdit().clearFocus())
         params_layout.addWidget(self.reset_button)
 
         params_group.setLayout(params_layout)
@@ -319,6 +342,7 @@ class ControlPanel(QWidget):
         detect_row.setSpacing(4)
         self.detect_button = QPushButton("开始检测")
         self.detect_button.clicked.connect(self.detect_clicked.emit)
+        self.detect_button.clicked.connect(lambda: self.profile_combo.lineEdit().clearFocus())
         self.auto_save_check = QCheckBox("自动保存")
         self.auto_save_check.stateChanged.connect(
             lambda state: self.auto_save_toggled.emit(state == Qt.Checked)
@@ -331,6 +355,9 @@ class ControlPanel(QWidget):
         detect_row.addWidget(self.open_folder_button)
         layout.addLayout(detect_row)
 
+        # 初始化摄像头选项（默认输入源为摄像头）
+        self._on_source_changed("摄像头")
+        
         layout.addStretch()
     
     def _create_slider(
@@ -441,8 +468,43 @@ class ControlPanel(QWidget):
             "图像文件": "image"
         }
         source = source_map.get(text, "camera")
-        self.file_button.setEnabled(source != "camera")
+        if source in ("video", "image"):
+            self.source_folder_button.show()
+        else:
+            self.source_folder_button.hide()
+        if source == "camera":
+            from ..input_sources.camera_source import CameraSource
+            cameras = CameraSource.list_cameras()
+            self.camera_combo.blockSignals(True)
+            self.camera_combo.clear()
+            if cameras:
+                for cam_id in cameras:
+                    self.camera_combo.addItem(f"摄像头 {cam_id}", cam_id)
+                self.camera_combo.setCurrentIndex(0)
+            else:
+                self.camera_combo.addItem("未检测到摄像头", -1)
+            self.camera_combo.blockSignals(False)
+            self.camera_combo.show()
+        else:
+            self.camera_combo.hide()
         self.source_changed.emit(source)
+    
+    @pyqtSlot(int)
+    def _on_camera_changed(self, index: int):
+        """摄像头切换"""
+        cam_id = self.camera_combo.itemData(index)
+        if cam_id >= 0:
+            self.camera_changed.emit(cam_id)
+    
+    @pyqtSlot()
+    def _on_open_source_folder(self):
+        """打开当前输入源的文件夹"""
+        idx = self.source_combo.currentIndex()
+        text = self.source_combo.currentText()
+        source_map = {"摄像头": "camera", "视频文件": "video", "图像文件": "image"}
+        src = source_map.get(text, "")
+        if src in ("video", "image"):
+            self.open_source_folder.emit(src)
     
     def get_params(self) -> Dict[str, Any]:
         """获取当前参数"""

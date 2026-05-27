@@ -126,6 +126,8 @@ class MainWindow(QMainWindow):
         self.is_detecting = False
         self.image_list = []
         self.current_image_index = 0
+        self.video_list = []
+        self.current_video_index = 0
         self._last_frame = None
         self._last_result = None
         self._last_edges = None
@@ -187,7 +189,6 @@ class MainWindow(QMainWindow):
         self.control_panel.detect_clicked.connect(self._on_detect_clicked)
         self.control_panel.source_changed.connect(self._on_source_changed)
         self.control_panel.param_changed.connect(self._on_param_changed)
-        self.control_panel.file_button.clicked.connect(self._on_file_select)
         self.control_panel.prev_image_clicked.connect(self._on_prev_image)
         self.control_panel.next_image_clicked.connect(self._on_next_image)
         self.control_panel.display_option_changed.connect(self._on_display_option_changed)
@@ -198,6 +199,8 @@ class MainWindow(QMainWindow):
         self.control_panel.delete_profile_clicked.connect(self._on_delete_profile)
         self.control_panel.auto_save_toggled.connect(self._on_auto_save_toggled)
         self.control_panel.open_saved_folder.connect(self._on_open_saved_folder)
+        self.control_panel.camera_changed.connect(self._on_camera_changed)
+        self.control_panel.open_source_folder.connect(self._on_open_source_folder)
         
         main_layout.addLayout(display_layout)
         main_layout.addWidget(self.control_panel)
@@ -217,8 +220,33 @@ class MainWindow(QMainWindow):
         saved_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
         saved_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(saved_dir))
-
-
+    
+    @pyqtSlot(str)
+    def _on_open_source_folder(self, source_type: str):
+        """打开数据源文件夹"""
+        folder_name = "videos" if source_type == "video" else "images"
+        folder = Path(__file__).resolve().parents[2] / "data" / folder_name
+        folder.mkdir(parents=True, exist_ok=True)
+        import os
+        os.startfile(str(folder))
+    
+    
+    @pyqtSlot(int)
+    def _on_camera_changed(self, camera_id: int):
+        """切换摄像头"""
+        self.stop_detection()
+        self._clear_display()
+        self.preview_timer.stop()
+        if self.current_source:
+            self.current_source.release()
+        self.current_source = CameraSource(camera_id=camera_id)
+        if self.current_source.open():
+            self.preview_timer.start(33)
+            self.statusBar().showMessage(f"已切换到摄像头 {camera_id}")
+        else:
+            self.statusBar().showMessage(f"无法打开摄像头 {camera_id}")
+    
+    
     def _load_config(self):
         params = {
             "blur_kernel_size": self.config_manager.get("preprocessing.blur_kernel_size", 5),
@@ -261,8 +289,17 @@ class MainWindow(QMainWindow):
         self.stop_detection()
         self._clear_display()
         self.preview_timer.stop()
+        # 非图片源时禁用浏览按钮
+        if source not in ("image", "video"):
+            self.control_panel.prev_button.setEnabled(False)
+            self.control_panel.next_button.setEnabled(False)
         if source == "camera":
-            self.current_source = CameraSource()
+            first_cam = 0
+            if self.control_panel.camera_combo.count() > 0:
+                first_cam = self.control_panel.camera_combo.itemData(0)
+                if first_cam is None or first_cam < 0:
+                    first_cam = 0
+            self.current_source = CameraSource(camera_id=first_cam)
             # 打开摄像头并开始预览
             if self.current_source.open():
                 self.preview_timer.start(33)  # ~30fps 预览
@@ -283,9 +320,27 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage(f"data/images 目录为空，请放入图片")
             else:
                  self.statusBar().showMessage("data/images 目录不存在")
-
+        elif source == "video":
+            videos_dir = Path(__file__).resolve().parents[2] / "data" / "videos"
+            if videos_dir.exists():
+                self.video_list = sorted([f for f in videos_dir.iterdir() if f.suffix.lower() in VideoSource.SUPPORTED_FORMATS])
+                if self.video_list:
+                    self.current_video_index = 0
+                    self._load_video_at_index()
+                    self.statusBar().showMessage(f"已加载 {len(self.video_list)} 个视频 (目录: {videos_dir.name})")
+                else:
+                    self.statusBar().showMessage(f"data/videos 目录为空，请放入视频")
+            else:
+                 self.statusBar().showMessage("data/videos 目录不存在")
+ 
     @pyqtSlot()
     def _on_prev_image(self):
+        if isinstance(self.current_source, VideoSource):
+            if self.current_video_index <= 0:
+                return
+            self.current_video_index -= 1
+            self._load_video_at_index()
+            return
         if not self.image_list or self.current_image_index <= 0:
             return
         self.current_image_index -= 1
@@ -293,6 +348,12 @@ class MainWindow(QMainWindow):
     
     @pyqtSlot()
     def _on_next_image(self):
+        if isinstance(self.current_source, VideoSource):
+            if self.current_video_index >= len(self.video_list) - 1:
+                return
+            self.current_video_index += 1
+            self._load_video_at_index()
+            return
         if not self.image_list or self.current_image_index >= len(self.image_list) - 1:
             return
         self.current_image_index += 1
@@ -313,6 +374,19 @@ class MainWindow(QMainWindow):
         if frame is not None:
             self._display_image(frame, self.original_label)
             self.start_detection()
+    
+    def _load_video_at_index(self):
+        if not self.video_list or self.current_video_index >= len(self.video_list):
+            return
+        self.stop_detection()
+        self._clear_display()
+        vid_path = self.video_list[self.current_video_index]
+        self.current_source = VideoSource(str(vid_path))
+        self.statusBar().showMessage(f"视频: {vid_path.name} ({self.current_video_index + 1}/{len(self.video_list)})")
+        self._update_browse_buttons(self.current_video_index > 0, self.current_video_index < len(self.video_list) - 1)
+        frame = self.current_source.get_frame()
+        if frame is not None:
+            self._display_image(frame, self.original_label)
     
     @pyqtSlot(str, object)
     def _on_param_changed(self, name, value):
