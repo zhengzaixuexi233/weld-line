@@ -167,6 +167,8 @@ class ControlPanel(QWidget):
     new_profile_clicked = pyqtSignal()      # 新建参数模板
     save_profile_clicked = pyqtSignal()    # 保存参数模板
     delete_profile_clicked = pyqtSignal()  # 删除参数模板
+    auto_save_toggled = pyqtSignal(bool)   # 自动保存开关
+    open_saved_folder = pyqtSignal()       # 打开保存文件夹
     
     def __init__(self, parent=None):
         """初始化控制面板"""
@@ -207,29 +209,11 @@ class ControlPanel(QWidget):
         source_group.setLayout(source_layout)
         layout.addWidget(source_group)
         
-        # 预处理参数
-        preproc_group = QGroupBox("预处理参数")
-        preproc_layout = QVBoxLayout()
-        
-        self.blur_slider = self._create_slider(
-            "模糊核大小", 1, 31, 5, 2,
-            tooltip=PARAM_TOOLTIPS.get("模糊核大小")
-        )
-        self.clahe_slider = self._create_double_slider(
-            "CLAHE限制", 0.1, 10.0, 2.0, 0.1,
-            tooltip=PARAM_TOOLTIPS.get("CLAHE限制")
-        )
-        
-        preproc_layout.addWidget(self.blur_slider)
-        preproc_layout.addWidget(self.clahe_slider)
-        preproc_group.setLayout(preproc_layout)
-        layout.addWidget(preproc_group)
-
-        # 检测参数
-        detect_group = QGroupBox("检测参数")
-        detect_layout = QVBoxLayout()
-
-        # 参数模板（嵌入检测参数顶部）
+        # 检测参数（合并预处理+检测）
+        params_group = QGroupBox("检测参数")
+        params_layout = QVBoxLayout()
+ 
+        # 参数模板（最上面）
         profile_layout = QHBoxLayout()
         profile_layout.setSpacing(6)
         self.profile_combo = QComboBox()
@@ -252,8 +236,22 @@ class ControlPanel(QWidget):
         profile_layout.addWidget(QLabel("模板:"))
         profile_layout.addWidget(self.profile_combo, 1)
         profile_layout.addLayout(right_layout)
-        detect_layout.addLayout(profile_layout)
+        params_layout.addLayout(profile_layout)
 
+        # 预处理参数
+        self.blur_slider = self._create_slider(
+            "模糊核大小", 1, 31, 5, 2,
+            tooltip=PARAM_TOOLTIPS.get("模糊核大小")
+        )
+        self.clahe_slider = self._create_double_slider(
+            "CLAHE限制", 0.1, 10.0, 2.0, 0.1,
+            tooltip=PARAM_TOOLTIPS.get("CLAHE限制")
+        )
+
+        params_layout.addWidget(self.blur_slider)
+        params_layout.addWidget(self.clahe_slider)
+ 
+        # 检测参数
         self.canny_low_slider = self._create_slider(
             "Canny低阈值", 0, 255, 50, 5,
             tooltip=PARAM_TOOLTIPS.get("Canny低阈值")
@@ -278,48 +276,61 @@ class ControlPanel(QWidget):
             "角度容差", 1, 90, 15, 1,
             tooltip=PARAM_TOOLTIPS.get("角度容差")
         )
-        
-        detect_layout.addWidget(self.canny_low_slider)
-        detect_layout.addWidget(self.canny_high_slider)
-        detect_layout.addWidget(self.hough_slider)
-        detect_layout.addWidget(self.min_length_slider)
-        detect_layout.addWidget(self.max_gap_slider)
-        detect_layout.addWidget(self.angle_tolerance_slider)
-        detect_group.setLayout(detect_layout)
-        layout.addWidget(detect_group)
-        
+
+        params_layout.addWidget(self.canny_low_slider)
+        params_layout.addWidget(self.canny_high_slider)
+        params_layout.addWidget(self.hough_slider)
+        params_layout.addWidget(self.min_length_slider)
+        params_layout.addWidget(self.max_gap_slider)
+        params_layout.addWidget(self.angle_tolerance_slider)
+
+        # 恢复默认参数（最下面）
+        self.reset_button = QPushButton("恢复默认参数")
+        self.reset_button.clicked.connect(self.reset_params_clicked.emit)
+        params_layout.addWidget(self.reset_button)
+
+        params_group.setLayout(params_layout)
+        layout.addWidget(params_group)
+
         # 显示选项
         display_group = QGroupBox("显示选项")
         display_layout = QVBoxLayout()
-        
+
         self.show_original_check = QCheckBox("显示原图")
         self.show_original_check.setChecked(True)
         self.show_processed_check = QCheckBox("显示处理图")
         self.show_processed_check.setChecked(True)
         self.show_edges_check = QCheckBox("显示边缘图")
         self.show_edges_check.setChecked(False)
-        
+
         display_layout.addWidget(self.show_original_check)
         display_layout.addWidget(self.show_processed_check)
         display_layout.addWidget(self.show_edges_check)
         display_group.setLayout(display_layout)
         layout.addWidget(display_group)
-        
-        
+
+
         self.show_original_check.stateChanged.connect(lambda: self.display_option_changed.emit())
         self.show_processed_check.stateChanged.connect(lambda: self.display_option_changed.emit())
         self.show_edges_check.stateChanged.connect(lambda: self.display_option_changed.emit())
         
-        # 检测按钮
+        # 检测按钮 + 自动保存 + 打开文件夹（紧凑排列）
+        detect_row = QHBoxLayout()
+        detect_row.setSpacing(4)
         self.detect_button = QPushButton("开始检测")
         self.detect_button.clicked.connect(self.detect_clicked.emit)
-        layout.addWidget(self.detect_button)
+        self.auto_save_check = QCheckBox("自动保存")
+        self.auto_save_check.stateChanged.connect(
+            lambda state: self.auto_save_toggled.emit(state == Qt.Checked)
+        )
+        self.open_folder_button = QPushButton("📂")
+        self.open_folder_button.setFixedWidth(36)
+        self.open_folder_button.clicked.connect(self.open_saved_folder.emit)
+        detect_row.addWidget(self.detect_button, 1)
+        detect_row.addWidget(self.auto_save_check)
+        detect_row.addWidget(self.open_folder_button)
+        layout.addLayout(detect_row)
 
-        # 恢复默认参数按钮
-        self.reset_button = QPushButton("恢复默认参数")
-        self.reset_button.clicked.connect(self.reset_params_clicked.emit)
-        layout.addWidget(self.reset_button)
-        
         layout.addStretch()
     
     def _create_slider(
@@ -388,6 +399,8 @@ class ControlPanel(QWidget):
         if tooltip:
             label_widget.setToolTip(tooltip)
         
+        factor = int(1.0 / step) if step < 1 else 1
+        
         spin = QDoubleSpinBox()
         spin.setMinimum(min_val)
         spin.setMaximum(max_val)
@@ -395,13 +408,28 @@ class ControlPanel(QWidget):
         spin.setSingleStep(step)
         spin.setFixedWidth(60)
         
+        slider = QSlider(Qt.Horizontal)
+        slider.setMinimum(int(min_val * factor))
+        slider.setMaximum(int(max_val * factor))
+        slider.setValue(int(default * factor))
+        slider.setSingleStep(1)
+        
+        spin.valueChanged.connect(
+            lambda v, s=slider, f=factor: s.setValue(int(round(v * f)))
+        )
+        slider.valueChanged.connect(
+            lambda v, sp=spin, f=factor: sp.setValue(v / f)
+        )
         spin.valueChanged.connect(
             lambda v, name=label: self.param_changed.emit(name, v)
         )
+        slider.valueChanged.connect(
+            lambda v, name=label, f=factor: self.param_changed.emit(name, v / f)
+        )
         
         layout.addWidget(label_widget)
+        layout.addWidget(slider)
         layout.addWidget(spin)
-        layout.addStretch()
         
         return widget
     

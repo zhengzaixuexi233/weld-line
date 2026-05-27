@@ -1,9 +1,10 @@
-﻿"""
+"""
 GUI主窗口模块
 """
 import cv2
 import numpy as np
 from pathlib import Path
+import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFileDialog, QStatusBar, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QPointF, QSizeF, QRectF
@@ -128,6 +129,11 @@ class MainWindow(QMainWindow):
         self._last_frame = None
         self._last_result = None
         self._last_edges = None
+        self._auto_save = False
+        self._vw_original = None
+        self._vw_result = None
+        self._vw_edges = None
+        self._save_session_dir = None
         self._is_drop_action = False  # 标记是否正在执行拖放操作
         self.setAcceptDrops(True)
         self._init_ui()
@@ -190,11 +196,29 @@ class MainWindow(QMainWindow):
         self.control_panel.new_profile_clicked.connect(self._on_new_profile)
         self.control_panel.save_profile_clicked.connect(self._on_save_profile)
         self.control_panel.delete_profile_clicked.connect(self._on_delete_profile)
+        self.control_panel.auto_save_toggled.connect(self._on_auto_save_toggled)
+        self.control_panel.open_saved_folder.connect(self._on_open_saved_folder)
         
         main_layout.addLayout(display_layout)
         main_layout.addWidget(self.control_panel)
         self.statusBar().showMessage("就绪")
     
+    @pyqtSlot(bool)
+    def _on_auto_save_toggled(self, enabled: bool):
+        """自动保存开关"""
+        self._auto_save = enabled
+        if not enabled:
+            self._stop_video_recording()
+    
+    @pyqtSlot()
+    def _on_open_saved_folder(self):
+        """打开保存文件夹"""
+        import os
+        saved_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
+        saved_dir.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(saved_dir))
+
+
     def _load_config(self):
         params = {
             "blur_kernel_size": self.config_manager.get("preprocessing.blur_kernel_size", 5),
@@ -235,6 +259,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _on_source_changed(self, source):
         self.stop_detection()
+        self._clear_display()
         self.preview_timer.stop()
         if source == "camera":
             self.current_source = CameraSource()
@@ -277,6 +302,7 @@ class MainWindow(QMainWindow):
         if not self.image_list or self.current_image_index >= len(self.image_list):
             return
         self.stop_detection()
+        self._clear_display()
         img_path = self.image_list[self.current_image_index]
         self.current_source = ImageSource(str(img_path))
         self.statusBar().showMessage(
@@ -440,6 +466,7 @@ class MainWindow(QMainWindow):
                 "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
             if file_path:
                 self.stop_detection()
+                self._clear_display()
                 self.current_source = ImageSource(file_path)
                 # 加载同目录下的所有图片以支持浏览
                 file_path_obj = Path(file_path)
@@ -474,6 +501,10 @@ class MainWindow(QMainWindow):
                     QMessageBox.critical(self, "错误", "无法打开摄像头")
                     return
         self.preview_timer.stop()
+        # 如果视频已播放完毕，从头开始
+        if isinstance(self.current_source, VideoSource):
+            if self.current_source.current_frame >= self.current_source.frame_count:
+                self.current_source.seek(0)
         self.is_detecting = True
         self.control_panel.detect_button.setText("停止检测")
         self.statusBar().showMessage("检测中...")
@@ -489,6 +520,7 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.control_panel.detect_button.setText("开始检测")
         self.statusBar().showMessage("已停止")
+        self._stop_video_recording()
         # 如果是摄像头源，恢复预览
         if isinstance(self.current_source, CameraSource):
             self.preview_timer.start(33)
@@ -512,6 +544,8 @@ class MainWindow(QMainWindow):
             self._display_image(result_frame, self.result_label)
         if options['show_edges']:
             self._display_image(edges, self.edges_label)
+        if self._auto_save:
+            self._save_frame(frame, result_frame, edges)
         self.statusBar().showMessage(f"检测到 {len(detections)} 条焊缝")
 
     def _detect_current_image_once(self):
@@ -551,6 +585,19 @@ class MainWindow(QMainWindow):
 
     def _show_enlarged(self, image_type: str):
         """点击图片后放大显示"""
+        from ..input_sources import VideoSource, CameraSource
+        
+        def _numpy_to_pixmap(img):
+            """将OpenCV图像转换为QPixmap"""
+            if len(img.shape) == 2:
+                h, w = img.shape
+                q_img = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+            else:
+                h, w, ch = img.shape
+                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                q_img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+            return QPixmap.fromImage(q_img)
+        
         # 获取对应的图像
         image = None
         title = ""
@@ -573,22 +620,32 @@ class MainWindow(QMainWindow):
         dialog.setMinimumSize(1200, 900)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowMaximizeButtonHint)
         dialog.setStyleSheet("QDialog { border: 3px solid #666; }")
-
+        
         # 创建图像标签
         image_label = ScalableImageLabel()
-
+        
         # 转换图像并显示
-        if len(image.shape) == 2:
-            h, w = image.shape
-            bytes_per_line = w
-            q_image = QImage(image.data, w, h, bytes_per_line, QImage.Format_Grayscale8)
-        else:
-            h, w, ch = image.shape
-            bytes_per_line = ch * w
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            q_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(q_image)
-        image_label.setPixmap(pixmap)
+        image_label.setPixmap(_numpy_to_pixmap(image))
+        
+        # 视频/摄像头源：实时更新放大画面
+        if isinstance(self.current_source, (VideoSource, CameraSource)):
+            def _live_update():
+                frame = None
+                if image_type == "original":
+                    frame = self._last_frame
+                elif image_type == "result":
+                    frame = self._last_result
+                elif image_type == "edges":
+                    frame = self._last_edges
+                if frame is not None:
+                    image_label.setPixmap(_numpy_to_pixmap(frame))
+            
+            fps = 30
+            if isinstance(self.current_source, VideoSource):
+                fps = self.current_source.get_fps() or 30
+            live_timer = QTimer(dialog)
+            live_timer.timeout.connect(_live_update)
+            live_timer.start(int(1000 / fps))
 
         # 布局
         layout = QVBoxLayout(dialog)
@@ -636,6 +693,7 @@ class MainWindow(QMainWindow):
             suffix = file_path.suffix.lower()
             if suffix in self._SUPPORTED_IMAGE:
                 self.stop_detection()
+                self._clear_display()
                 self.current_source = ImageSource(str(file_path))
                 self.image_list = ImageSource.list_images(file_path.parent)
                 self.current_image_index = 0
@@ -669,3 +727,61 @@ class MainWindow(QMainWindow):
                 event.acceptProposedAction()
                 return
         event.ignore()
+
+    def _save_frame(self, original, result, edges):
+        # 视频/摄像头源：写入视频文件
+        if isinstance(self.current_source, (VideoSource, CameraSource)):
+            if self._vw_original is None:
+                self._start_video_recording(original)
+            if self._vw_original is not None:
+                self._vw_original.write(original)
+                self._vw_result.write(result)
+                self._vw_edges.write(edges)
+        else:
+            # 图片源：保存为 PNG
+            self._save_detection_images(original, result, edges)
+
+    def _start_video_recording(self, frame):
+        now = datetime.datetime.now()
+        base_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
+        self._save_session_dir = base_dir / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S_%f")
+        self._save_session_dir.mkdir(parents=True, exist_ok=True)
+
+        h, w = frame.shape[:2]
+        fps = 30
+        if isinstance(self.current_source, VideoSource):
+            fps = self.current_source.get_fps() or 30
+
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        self._vw_original = cv2.VideoWriter(str(self._save_session_dir / "original.avi"), fourcc, fps, (w, h))
+        self._vw_result = cv2.VideoWriter(str(self._save_session_dir / "result.avi"), fourcc, fps, (w, h))
+        self._vw_edges = cv2.VideoWriter(str(self._save_session_dir / "edges.avi"), fourcc, fps, (w, h), isColor=False)
+        self.statusBar().showMessage(f"检测中，已开始录像: {self._save_session_dir.name}")
+
+    def _stop_video_recording(self):
+        for vw_name in ("_vw_original", "_vw_result", "_vw_edges"):
+            vw = getattr(self, vw_name, None)
+            if vw is not None:
+                vw.release()
+                setattr(self, vw_name, None)
+        if self._save_session_dir is not None:
+            self._save_session_dir = None
+
+    def _save_detection_images(self, original, result, edges):
+        """保存检测图像到 data/saved/"""
+        now = datetime.datetime.now()
+        base_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
+        session_dir = base_dir / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S")
+        session_dir.mkdir(parents=True, exist_ok=True)
+        ts = now.strftime("%H%M%S%f")
+        cv2.imwrite(str(session_dir / f"image_original_{ts}.png"), original)
+        cv2.imwrite(str(session_dir / f"image_result_{ts}.png"), result)
+        cv2.imwrite(str(session_dir / f"image_edges_{ts}.png"), edges)
+
+    def _clear_display(self):
+        """清除残留的检测结果图像"""
+        self.result_label.clear()
+        self.edges_label.clear()
+        self._last_result = None
+        self._last_edges = None
+    
