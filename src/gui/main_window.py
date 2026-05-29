@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFileDialog, QStatusBar, QMessageBox)
+    QLabel, QFileDialog, QStatusBar, QMessageBox, QSlider, QShortcut, QPushButton)
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QPointF, QSizeF, QRectF
 from PyQt5.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QCursor, QPainter
 from typing import Optional
@@ -27,6 +27,25 @@ class ClickableLabel(QLabel):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
+
+
+class ClickableSlider(QSlider):
+    """支持点击直接跳转到点击位置的 QSlider"""
+    def _value_from_x(self, x):
+        return int(self.minimum() + (self.maximum() - self.minimum()) * x / max(1, self.width()))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.setValue(self._value_from_x(event.x()))
+            self.sliderPressed.emit()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self.setValue(self._value_from_x(event.x()))
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.sliderReleased.emit()
 
 
 class ScalableImageLabel(QWidget):
@@ -124,6 +143,7 @@ class MainWindow(QMainWindow):
         self.detector = WeldDetector()
         self.current_source = None
         self.is_detecting = False
+        self.is_video_playing = False
         self.image_list = []
         self.current_image_index = 0
         self.video_list = []
@@ -137,6 +157,13 @@ class MainWindow(QMainWindow):
         self._vw_edges = None
         self._save_session_dir = None
         self._is_drop_action = False  # 标记是否正在执行拖放操作
+        self._progress_dragging = False
+        self.video_slider = None
+        self.video_progress_row = None
+        self.video_current_time_label = None
+        self.video_total_time_label = None
+        self.video_play_btn = None
+        self._enlarged_dialog = None
         self.setAcceptDrops(True)
         self._init_ui()
         self._load_config()
@@ -151,7 +178,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         
-        display_layout = QVBoxLayout()
+        self.display_layout = QVBoxLayout()
+        display_layout = self.display_layout
         self.original_label = ClickableLabel("原始图像")
         self.original_label.setAlignment(Qt.AlignCenter)
         self.original_label.setMinimumSize(400, 100)
@@ -201,7 +229,9 @@ class MainWindow(QMainWindow):
         self.control_panel.open_saved_folder.connect(self._on_open_saved_folder)
         self.control_panel.camera_changed.connect(self._on_camera_changed)
         self.control_panel.open_source_folder.connect(self._on_open_source_folder)
-        
+        # 全局空格键：视频源切换播放，其他源切换检测
+        QShortcut(Qt.Key_Space, self).activated.connect(self._toggle_space_action)
+
         main_layout.addLayout(display_layout)
         main_layout.addWidget(self.control_panel)
         self.statusBar().showMessage("就绪")
@@ -332,7 +362,12 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage(f"data/videos 目录为空，请放入视频")
             else:
                  self.statusBar().showMessage("data/videos 目录不存在")
- 
+        # 视频源：创建进度条；其他源：销毁进度条
+        if source == "video":
+            self._create_video_progress()
+        else:
+            self._destroy_video_progress()
+
     @pyqtSlot()
     def _on_prev_image(self):
         if isinstance(self.current_source, VideoSource):
@@ -384,10 +419,34 @@ class MainWindow(QMainWindow):
         self.current_source = VideoSource(str(vid_path))
         self.statusBar().showMessage(f"视频: {vid_path.name} ({self.current_video_index + 1}/{len(self.video_list)})")
         self._update_browse_buttons(self.current_video_index > 0, self.current_video_index < len(self.video_list) - 1)
+        # 确保布局已完成，label.size() 返回正确值
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
         frame = self.current_source.get_frame()
         if frame is not None:
-            self._display_image(frame, self.original_label)
-    
+            self._last_frame = frame
+            detections, processed, edges = self.detector.detect(frame)
+            result_frame = draw_detections(frame, detections)
+            self._last_result = result_frame
+            self._last_edges = edges
+            options = self.control_panel.get_display_options()
+            if options['show_original']:
+                self._display_image(frame, self.original_label)
+            if options['show_processed']:
+                self._display_image(result_frame, self.result_label)
+            if options['show_edges']:
+                self._display_image(edges, self.edges_label)
+            self.start_detection()
+        # 更新进度条范围
+        if self.video_slider is not None:
+            total = self.current_source.frame_count
+            if total > 0:
+                self.video_slider.setMaximum(total - 1)
+                self.video_slider.setValue(0)
+                fps_val = self.current_source.get_fps() or 30
+                self.video_current_time_label.setText(self._format_time(0))
+                self.video_total_time_label.setText(self._format_time(total / fps_val))
+
     @pyqtSlot(str, object)
     def _on_param_changed(self, name, value):
         param_map = {
@@ -412,7 +471,18 @@ class MainWindow(QMainWindow):
                 value = min(255, self.detector.canny_low + 1)
                 self.control_panel.set_params({"canny_high": value})
             self.detector.update_params(**{param_name: value})
-    
+            # 视频暂停时改参数，重新检测当前帧
+            if isinstance(self.current_source, VideoSource) and self.is_detecting and not self.is_video_playing and self._last_frame is not None:
+                detections, processed, edges = self.detector.detect(self._last_frame)
+                result_frame = draw_detections(self._last_frame, detections)
+                self._last_result = result_frame
+                self._last_edges = edges
+                options = self.control_panel.get_display_options()
+                if options['show_processed']:
+                    self._display_image(result_frame, self.result_label)
+                if options['show_edges']:
+                    self._display_image(edges, self.edges_label)
+
     @pyqtSlot()
     def _on_display_option_changed(self):
         """显示选项改变时更新面板可见性"""
@@ -420,6 +490,7 @@ class MainWindow(QMainWindow):
         self.original_label.setVisible(options['show_original'])
         self.result_label.setVisible(options['show_processed'])
         self.edges_label.setVisible(options['show_edges'])
+        self.display_layout.invalidate()
         if self._last_frame is not None:
             if options['show_original']:
                 self._display_image(self._last_frame, self.original_label)
@@ -533,6 +604,15 @@ class MainWindow(QMainWindow):
                 if frame is not None:
                     self._display_image(frame, self.original_label)
                 self.statusBar().showMessage(f"已加载视频: {file_path}")
+                # 更新进度条范围
+                if self.video_slider is not None:
+                    total = self.current_source.frame_count
+                    if total > 0:
+                        self.video_slider.setMaximum(total - 1)
+                        self.video_slider.setValue(0)
+                        fps_val = self.current_source.get_fps() or 30
+                        self.video_current_time_label.setText(self._format_time(0))
+                        self.video_total_time_label.setText(self._format_time(total / fps_val))
         elif current_source == "图像文件":
             default_dir = str(Path(__file__).resolve().parents[2] / "data" / "images")
             file_path, _ = QFileDialog.getOpenFileName(
@@ -582,23 +662,47 @@ class MainWindow(QMainWindow):
         self.is_detecting = True
         self.control_panel.detect_button.setText("停止检测")
         self.statusBar().showMessage("检测中...")
-        fps = 30
+        # 视频源：只标记检测开启，不启动播放定时器
         if isinstance(self.current_source, VideoSource):
-            fps = self.current_source.get_fps()
-        elif isinstance(self.current_source, ImageSource):
-            fps = 5
-        self.timer.start(int(1000 / fps))
-    
+            if self.video_play_btn is not None:
+                self.video_play_btn.setText("⏸" if self.is_video_playing else "▶")
+            if self.is_video_playing:
+                fps = self.current_source.get_fps() or 30
+                self.timer.start(int(1000 / fps))
+        else:
+            fps = 30
+            if isinstance(self.current_source, ImageSource):
+                fps = 5
+            self.timer.start(int(1000 / fps))
+        # 视频源：配置进度条范围
+        if isinstance(self.current_source, VideoSource) and self.video_slider is not None:
+            total = self.current_source.frame_count
+            if total > 0:
+                self.video_slider.setMaximum(total - 1)
+                self.video_slider.setValue(self.current_source.current_frame)
+                fps_val = self.current_source.get_fps() or 30
+                self.video_current_time_label.setText(self._format_time(self.current_source.current_frame / fps_val))
+                self.video_total_time_label.setText(self._format_time(total / fps_val))
+        if self.video_play_btn is not None:
+            self.video_play_btn.setText("⏸")
+
     def stop_detection(self):
         self.is_detecting = False
-        self.timer.stop()
         self.control_panel.detect_button.setText("开始检测")
         self.statusBar().showMessage("已停止")
         self._stop_video_recording()
+        # 视频源：不停止播放定时器，由 is_video_playing 控制
+        if isinstance(self.current_source, VideoSource):
+            if not self.is_video_playing:
+                self.timer.stop()
+        else:
+            self.timer.stop()
         # 如果是摄像头源，恢复预览
         if isinstance(self.current_source, CameraSource):
             self.preview_timer.start(33)
-    
+        if self.video_play_btn is not None and not isinstance(self.current_source, VideoSource):
+            self.video_play_btn.setText("▶")
+
     def _process_frame(self):
         if not self.is_detecting or self.current_source is None:
             return
@@ -620,6 +724,8 @@ class MainWindow(QMainWindow):
             self._display_image(edges, self.edges_label)
         if self._auto_save:
             self._save_frame(frame, result_frame, edges)
+        if isinstance(self.current_source, VideoSource):
+            self._update_video_progress()
         self.statusBar().showMessage(f"检测到 {len(detections)} 条焊缝")
 
     def _detect_current_image_once(self):
@@ -644,6 +750,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"检测到 {len(detections)} 条焊缝")
     
     def _display_image(self, image, label):
+        # 自动保存引用以便放大查看
+        if label is self.original_label:
+            self._last_frame = image
+        elif label is self.result_label:
+            self._last_result = image
+        elif label is self.edges_label:
+            self._last_edges = image
         if len(image.shape) == 2:
             h, w = image.shape
             bytes_per_line = w
@@ -656,6 +769,134 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap.fromImage(q_image)
         scaled_pixmap = pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         label.setPixmap(scaled_pixmap)
+
+    # ---------- 视频进度条（动态创建/销毁） ----------
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+    def _create_video_progress(self):
+        """在 display_layout 末尾动态创建视频进度条"""
+        if self.video_progress_row is not None:
+            return
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 2, 0, 0)
+        self.video_current_time_label = QLabel("00:00")
+        self.video_current_time_label.setFixedWidth(50)
+        self.video_current_time_label.setAlignment(Qt.AlignCenter)
+        self.video_slider = ClickableSlider(Qt.Horizontal)
+        self.video_slider.setFocusPolicy(Qt.NoFocus)
+        self.video_slider.setMinimum(0)
+        self.video_slider.setMaximum(0)
+        self.video_total_time_label = QLabel("00:00")
+        self.video_total_time_label.setFixedWidth(50)
+        self.video_total_time_label.setAlignment(Qt.AlignCenter)
+        # 播放/暂停按钮
+        self.video_play_btn = QPushButton("▶")
+        self.video_play_btn.setFixedWidth(36)
+        self.video_play_btn.setFocusPolicy(Qt.NoFocus)
+        self.video_play_btn.clicked.connect(self._toggle_video_detect)
+        lay.addWidget(self.video_play_btn)
+        lay.addWidget(self.video_current_time_label)
+        lay.addWidget(self.video_slider, 1)
+        lay.addWidget(self.video_total_time_label)
+        self.video_slider.sliderPressed.connect(self._on_video_slider_pressed)
+        self.video_slider.sliderReleased.connect(self._on_video_slider_released)
+        self.video_slider.valueChanged.connect(self._on_video_slider_moved)
+        # 添加到 display_layout（图片标签之后、control_panel 之前）
+        self.display_layout.addWidget(row)
+        self.video_progress_row = row
+
+    def _destroy_video_progress(self):
+        """销毁视频进度条控件"""
+        if self.video_progress_row is None:
+            return
+        self._progress_dragging = False
+        self.video_slider.blockSignals(True)
+        self.display_layout.removeWidget(self.video_progress_row)
+        self.video_progress_row.deleteLater()
+        self.video_progress_row = None
+        self.video_slider = None
+        self.video_current_time_label = None
+        self.video_total_time_label = None
+        self.video_play_btn = None
+
+    def _toggle_space_action(self):
+        """空格键：视频源切换播放，其他源切换检测"""
+        if isinstance(self.current_source, VideoSource) and self.video_play_btn is not None:
+            self._toggle_video_detect()
+        else:
+            self._on_detect_clicked()
+
+    def _toggle_video_detect(self):
+        """切换视频播放/暂停（检测始终开启）"""
+        if self.is_video_playing:
+            self.is_video_playing = False
+            self.timer.stop()
+            if self.video_play_btn is not None:
+                self.video_play_btn.setText("▶")
+        else:
+            self.is_video_playing = True
+            fps = self.current_source.get_fps() or 30
+            self.timer.start(int(1000 / fps))
+            if self.video_play_btn is not None:
+                self.video_play_btn.setText("⏸")
+    def _update_video_progress(self):
+        if self.video_slider is None or self._progress_dragging:
+            return
+        if not isinstance(self.current_source, VideoSource):
+            return
+        current = self.current_source.current_frame
+        total = self.current_source.frame_count
+        if total <= 0:
+            return
+        self.video_slider.blockSignals(True)
+        self.video_slider.setValue(current)
+        self.video_slider.blockSignals(False)
+        self.video_current_time_label.setText(self._format_time(current / self.current_source.get_fps()))
+
+    def _on_video_slider_pressed(self):
+        self._progress_dragging = True
+        self.timer.stop()
+
+    def _on_video_slider_released(self):
+        if not isinstance(self.current_source, VideoSource):
+            self._progress_dragging = False
+            return
+        target = self.video_slider.value()
+        self._stop_video_recording()
+        self.current_source.seek(target)
+        self._progress_dragging = False
+        if self.is_video_playing:
+            fps = self.current_source.get_fps() or 30
+            self.timer.start(int(1000 / fps))
+        else:
+            # 静止状态下跳转后检测并显示目标帧
+            frame = self.current_source.get_frame()
+            if frame is not None:
+                self._last_frame = frame
+                detections, processed, edges = self.detector.detect(frame)
+                result_frame = draw_detections(frame, detections)
+                self._last_result = result_frame
+                self._last_edges = edges
+                options = self.control_panel.get_display_options()
+                if options['show_original']:
+                    self._display_image(frame, self.original_label)
+                if options['show_processed']:
+                    self._display_image(result_frame, self.result_label)
+                if options['show_edges']:
+                    self._display_image(edges, self.edges_label)
+
+    def _on_video_slider_moved(self, value: int):
+        if not self._progress_dragging or self.video_slider is None:
+            return
+        if not isinstance(self.current_source, VideoSource):
+            return
+        fps = self.current_source.get_fps() or 30
+        self.video_current_time_label.setText(self._format_time(value / fps))
 
     def _show_enlarged(self, image_type: str):
         """点击图片后放大显示"""
@@ -701,7 +942,74 @@ class MainWindow(QMainWindow):
         # 转换图像并显示
         image_label.setPixmap(_numpy_to_pixmap(image))
         
-        # 视频/摄像头源：实时更新放大画面
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(image_label, 1)
+
+        # 视频源：在放大窗口底部添加进度条
+        dlg_slider = None
+        dlg_time_label = None
+        dlg_play_btn = None
+        if isinstance(self.current_source, VideoSource) and self.current_source.frame_count > 0:
+            progress_row = QWidget()
+            pl = QHBoxLayout(progress_row)
+            pl.setContentsMargins(0, 2, 0, 0)
+            # 播放/暂停按钮
+            dlg_play_btn = QPushButton("⏸" if self.is_detecting else "▶")
+            dlg_play_btn.setFixedWidth(36)
+            dlg_play_btn.setFocusPolicy(Qt.NoFocus)
+            dlg_time_label = QLabel("00:00 / " + self._format_time(self.current_source.frame_count / (self.current_source.get_fps() or 30)))
+            dlg_time_label.setFixedWidth(120)
+            dlg_time_label.setAlignment(Qt.AlignCenter)
+            dlg_slider = ClickableSlider(Qt.Horizontal)
+            dlg_slider.setFocusPolicy(Qt.NoFocus)
+            dlg_slider.setMinimum(0)
+            dlg_slider.setMaximum(self.current_source.frame_count - 1)
+            dlg_slider.setValue(self.current_source.current_frame)
+            pl.addWidget(dlg_play_btn)
+            pl.addWidget(dlg_time_label)
+            pl.addWidget(dlg_slider, 1)
+            layout.addWidget(progress_row)
+
+            # 播放/暂停按钮逻辑（切换视频播放，不影响检测）
+            def _toggle_play():
+                self._toggle_video_detect()
+                dlg_play_btn.setText("⏸" if self.is_video_playing else "▶")
+            dlg_play_btn.clicked.connect(_toggle_play)
+            # 空格键切换视频播放
+            QShortcut(Qt.Key_Space, dialog).activated.connect(_toggle_play)
+
+            # 拖拽放大窗口进度条时跳转视频
+            _dlg_dragging = [False]
+            def _on_dlg_pressed():
+                _dlg_dragging[0] = True
+                self._on_video_slider_pressed()  # 暂停主窗口播放
+            def _on_dlg_released():
+                _dlg_dragging[0] = False
+                target = dlg_slider.value()
+                self._stop_video_recording()
+                self.current_source.seek(target)
+                self._progress_dragging = False
+                if self.is_video_playing:
+                    fps_val = self.current_source.get_fps() or 30
+                    self.timer.start(int(1000 / fps_val))
+                else:
+                    # 暂停状态下跳转后检测并更新帧
+                    frame = self.current_source.get_frame()
+                    if frame is not None:
+                        self._last_frame = frame
+                        detections, processed, edges = self.detector.detect(frame)
+                        result_frame = draw_detections(frame, detections)
+                        self._last_result = result_frame
+                        self._last_edges = edges
+            def _on_dlg_moved(val):
+                if _dlg_dragging[0]:
+                    fps_val = self.current_source.get_fps() or 30
+                    dlg_time_label.setText(f"{self._format_time(val / fps_val)} / {self._format_time(self.current_source.frame_count / fps_val)}")
+            dlg_slider.sliderPressed.connect(_on_dlg_pressed)
+            dlg_slider.sliderReleased.connect(_on_dlg_released)
+            dlg_slider.valueChanged.connect(_on_dlg_moved)
+
+        # 实时更新：放大画面 + 进度条
         if isinstance(self.current_source, (VideoSource, CameraSource)):
             def _live_update():
                 frame = None
@@ -713,7 +1021,16 @@ class MainWindow(QMainWindow):
                     frame = self._last_edges
                 if frame is not None:
                     image_label.setPixmap(_numpy_to_pixmap(frame))
-            
+                # 同步进度条和按钮状态
+                if dlg_play_btn is not None:
+                    dlg_play_btn.setText("⏸" if self.is_video_playing else "▶")
+                if dlg_slider is not None and not _dlg_dragging[0]:
+                    dlg_slider.blockSignals(True)
+                    dlg_slider.setValue(self.current_source.current_frame)
+                    dlg_slider.blockSignals(False)
+                    fps_val = self.current_source.get_fps() or 30
+                    dlg_time_label.setText(f"{self._format_time(self.current_source.current_frame / fps_val)} / {self._format_time(self.current_source.frame_count / fps_val)}")
+
             fps = 30
             if isinstance(self.current_source, VideoSource):
                 fps = self.current_source.get_fps() or 30
@@ -721,11 +1038,11 @@ class MainWindow(QMainWindow):
             live_timer.timeout.connect(_live_update)
             live_timer.start(int(1000 / fps))
 
-        # 布局
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(image_label)
-
-        dialog.exec_()
+        # 关闭之前的放大窗口
+        if self._enlarged_dialog is not None:
+            self._enlarged_dialog.close()
+        self._enlarged_dialog = dialog
+        dialog.show()
     
     def closeEvent(self, event):
         self.stop_detection()
