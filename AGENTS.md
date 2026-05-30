@@ -40,14 +40,14 @@
 
 ### 2. 输入源模块 (src/input_sources/)
 
-- **ImageSource**：静态图像读取，自动扫描 `data/images` 目录，支持拖放导入和上一张/下一张浏览，加载后自动持续检测
-- **VideoSource**：视频文件读取（支持上下文管理器、seek跳转），检测完毕后可重新开始
+- **ImageSource**：静态图像读取，自动扫描 `data/images` 目录，支持拖放导入和上一张/下一张浏览，加载后自动持续检测；使用 `np.fromfile` + `cv2.imdecode` 读取图片以兼容 Windows 中文/非 ASCII 安装路径
+- **VideoSource**：视频文件读取（支持上下文管理器、seek跳转），检测完毕后可重新开始；视频目录为空时保持当前源为空并仅显示空目录状态，避免沿用旧源触发进度条异常
 - **CameraSource**：摄像头实时捕获（支持上下文管理器），`list_cameras()` 静态方法扫描所有可用设备，GUI 支持多摄像头下拉切换（与输入源选择器 75%/25% 横向排列）
 
 ### 3. GUI模块 (src/gui/)
 
 - **MainWindow**：主窗口
-  - 三图同屏：原图、边缘图（居中）、处理图（下方），支持独立开关显示
+  - 三图同屏：原图、边缘图（居中）、处理图（下方），支持独立开关显示，切换后会按可见区域重新缩放缓存画面
   - 摄像头预览（检测前显示原始画面）
   - 图片自动持续检测（选择/拖入后自动开始，离开图片源自动停止）
   - 拖放文件加载（图片/视频）
@@ -84,6 +84,11 @@
 
 - **visualization**：检测结果可视化
 
+### 7. 打包发布
+
+- PyInstaller 使用 onedir 方式打包，`contents_directory='_internal'`，使 Python/DLL/PyQt/OpenCV/NumPy 等运行依赖收纳到 `_internal/` 子目录。
+- 打包产物根目录保留 `焊缝识别系统.exe`、`config/`、`data/` 和 `_internal/`，便于 Inno Setup 直接收集整个目录制作安装包。
+- 运行时路径统一通过 `src/utils/paths.py` 的 `app_path()` / `app_base_dir()` 获取，兼容源码运行和 PyInstaller 打包运行。
 ### 6. 自动保存功能
 
 - 勾选「自动保存」后，每次检测帧自动保存：
@@ -318,4 +323,7 @@ Windows 用户也可双击 `启动程序.pyw`。
 2. **优先级**: 专业技能（如 computer-vision-opencv）优先于通用技能
 3. **组合使用**: 复杂任务可能需要多个 skills 配合
 4. **文档记录**: 使用 skill 后应在代码中注明来源
+
+
+
 

@@ -53,7 +53,10 @@ class ImageSource:
         if path.suffix.lower() not in self.SUPPORTED_FORMATS:
             raise ValueError(f"不支持的图像格式: {path.suffix}")
         
-        self.image = cv2.imread(str(path))
+        # cv2.imread 在 Windows 中文/非 ASCII 路径下可能读取失败；
+        # 先用 numpy 读取原始字节，再交给 OpenCV 解码，兼容打包后的中文安装目录。
+        image_data = np.fromfile(str(path), dtype=np.uint8)
+        self.image = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
         if self.image is None:
             raise ValueError(f"无法读取图像: {path}")
         

@@ -1,4 +1,4 @@
-"""
+﻿"""
 GUI主窗口模块
 """
 import cv2
@@ -6,7 +6,8 @@ import numpy as np
 from pathlib import Path
 import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFileDialog, QStatusBar, QMessageBox, QSlider, QShortcut, QPushButton)
+    QLabel, QFileDialog, QStatusBar, QMessageBox, QSlider, QShortcut, QPushButton,
+    QSizePolicy)
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QPointF, QSizeF, QRectF
 from PyQt5.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QCursor, QPainter
 from typing import Optional
@@ -16,6 +17,7 @@ from ..core.detector import WeldDetector
 from ..input_sources import ImageSource, VideoSource, CameraSource
 from ..config.manager import ConfigManager
 from ..utils.visualization import draw_detections
+from ..utils.paths import app_path
 
 from PyQt5.QtWidgets import QDialog
 from PyQt5.QtCore import pyqtSignal
@@ -24,9 +26,35 @@ class ClickableLabel(QLabel):
     """可点击的QLabel，点击后发射clicked信号"""
     clicked = pyqtSignal()
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._source_pixmap = None
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
+
+    def set_image_pixmap(self, pixmap):
+        """保存原始 pixmap，尺寸变化时可重新按控件区域缩放。"""
+        self._source_pixmap = pixmap
+        self._update_scaled_pixmap()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_scaled_pixmap()
+
+    def clear(self):
+        self._source_pixmap = None
+        super().clear()
+
+    def _update_scaled_pixmap(self):
+        if self._source_pixmap is None or self.width() <= 0 or self.height() <= 0:
+            return
+        scaled_pixmap = self._source_pixmap.scaled(
+            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        super().setPixmap(scaled_pixmap)
 
 
 class ClickableSlider(QSlider):
@@ -247,7 +275,7 @@ class MainWindow(QMainWindow):
     def _on_open_saved_folder(self):
         """打开保存文件夹"""
         import os
-        saved_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
+        saved_dir = app_path("data", "saved")
         saved_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(saved_dir))
     
@@ -255,7 +283,7 @@ class MainWindow(QMainWindow):
     def _on_open_source_folder(self, source_type: str):
         """打开数据源文件夹"""
         folder_name = "videos" if source_type == "video" else "images"
-        folder = Path(__file__).resolve().parents[2] / "data" / folder_name
+        folder = app_path("data", folder_name)
         folder.mkdir(parents=True, exist_ok=True)
         import os
         os.startfile(str(folder))
@@ -316,9 +344,19 @@ class MainWindow(QMainWindow):
     
     @pyqtSlot(str)
     def _on_source_changed(self, source):
+        # 切换源前关闭放大窗口，避免 live_update 访问已失效的源对象
+        if getattr(self, "_enlarged_live_timer", None) is not None:
+            self._enlarged_live_timer.stop()
+            self._enlarged_live_timer = None
+        if self._enlarged_dialog is not None:
+            self._enlarged_dialog.close()
+            self._enlarged_dialog = None
         self.stop_detection()
         self._clear_display()
         self.preview_timer.stop()
+        if self.current_source:
+            self.current_source.release()
+            self.current_source = None
         # 非图片源时禁用浏览按钮
         if source not in ("image", "video"):
             self.control_panel.prev_button.setEnabled(False)
@@ -338,7 +376,7 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("无法打开摄像头")
         elif source == "image":
             # 自动扫描 data/images 目录
-            images_dir = Path(__file__).resolve().parents[2] / "data" / "images"
+            images_dir = app_path("data", "images")
             if images_dir.exists():
                 self.image_list = ImageSource.list_images(images_dir)
                 if self.image_list:
@@ -351,7 +389,7 @@ class MainWindow(QMainWindow):
             else:
                  self.statusBar().showMessage("data/images 目录不存在")
         elif source == "video":
-            videos_dir = Path(__file__).resolve().parents[2] / "data" / "videos"
+            videos_dir = app_path("data", "videos")
             if videos_dir.exists():
                 self.video_list = sorted([f for f in videos_dir.iterdir() if f.suffix.lower() in VideoSource.SUPPORTED_FORMATS])
                 if self.video_list:
@@ -367,6 +405,16 @@ class MainWindow(QMainWindow):
             self._create_video_progress()
         else:
             self._destroy_video_progress()
+
+        # 视频源：创建进度条后更新进度条范围
+        if source == "video" and self.video_slider is not None and isinstance(self.current_source, VideoSource):
+            total = self.current_source.frame_count
+            if total > 0:
+                self.video_slider.setMaximum(total - 1)
+                self.video_slider.setValue(0)
+                fps_val = self.current_source.get_fps() or 30
+                self.video_current_time_label.setText(self._format_time(0))
+                self.video_total_time_label.setText(self._format_time(total / fps_val))
 
     @pyqtSlot()
     def _on_prev_image(self):
@@ -491,13 +539,17 @@ class MainWindow(QMainWindow):
         self.result_label.setVisible(options['show_processed'])
         self.edges_label.setVisible(options['show_edges'])
         self.display_layout.invalidate()
-        if self._last_frame is not None:
-            if options['show_original']:
-                self._display_image(self._last_frame, self.original_label)
-            if options['show_processed']:
-                self._display_image(self._last_result, self.result_label)
-            if options['show_edges']:
-                self._display_image(self._last_edges, self.edges_label)
+        QTimer.singleShot(0, self._refresh_visible_cached_images)
+
+    def _refresh_visible_cached_images(self):
+        """布局尺寸更新后，按当前可见区域重新缩放缓存图像。"""
+        options = self.control_panel.get_display_options()
+        if options['show_original'] and self._last_frame is not None:
+            self._display_image(self._last_frame, self.original_label)
+        if options['show_processed'] and self._last_result is not None:
+            self._display_image(self._last_result, self.result_label)
+        if options['show_edges'] and self._last_edges is not None:
+            self._display_image(self._last_edges, self.edges_label)
 
     @pyqtSlot()
     def _on_reset_params(self):
@@ -614,7 +666,7 @@ class MainWindow(QMainWindow):
                         self.video_current_time_label.setText(self._format_time(0))
                         self.video_total_time_label.setText(self._format_time(total / fps_val))
         elif current_source == "图像文件":
-            default_dir = str(Path(__file__).resolve().parents[2] / "data" / "images")
+            default_dir = str(app_path("data", "images"))
             file_path, _ = QFileDialog.getOpenFileName(
                 self, "选择图像文件", default_dir,
                 "图像文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)")
@@ -708,7 +760,32 @@ class MainWindow(QMainWindow):
             return
         frame = self.current_source.get_frame()
         if frame is None:
-            self.stop_detection()
+            # 视频播放完毕：回到第0帧并暂停，不退出检测
+            if isinstance(self.current_source, VideoSource):
+                self.is_video_playing = False
+                self.timer.stop()
+                self.current_source.seek(0)
+                if self.video_play_btn is not None:
+                    self.video_play_btn.setText("▶")
+                self._update_video_progress()
+                # 检测并显示第0帧
+                frame0 = self.current_source.get_frame()
+                if frame0 is not None:
+                    self._last_frame = frame0
+                    det, proc, edg = self.detector.detect(frame0)
+                    res = draw_detections(frame0, det)
+                    self._last_result = res
+                    self._last_edges = edg
+                    opts = self.control_panel.get_display_options()
+                    if opts['show_original']:
+                        self._display_image(frame0, self.original_label)
+                    if opts['show_processed']:
+                        self._display_image(res, self.result_label)
+                    if opts['show_edges']:
+                        self._display_image(edg, self.edges_label)
+                self.statusBar().showMessage("视频播放完毕，已回到起点")
+            else:
+                self.stop_detection()
             return
         detections, processed, edges = self.detector.detect(frame)
         result_frame = draw_detections(frame, detections)
@@ -767,8 +844,7 @@ class MainWindow(QMainWindow):
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             q_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(q_image)
-        scaled_pixmap = pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        label.setPixmap(scaled_pixmap)
+        label.set_image_pixmap(pixmap)
 
     # ---------- 视频进度条（动态创建/销毁） ----------
 
@@ -1012,6 +1088,9 @@ class MainWindow(QMainWindow):
         # 实时更新：放大画面 + 进度条
         if isinstance(self.current_source, (VideoSource, CameraSource)):
             def _live_update():
+                # 源已切换时停止更新
+                if not isinstance(self.current_source, (VideoSource, CameraSource)):
+                    return
                 frame = None
                 if image_type == "original":
                     frame = self._last_frame
@@ -1037,6 +1116,7 @@ class MainWindow(QMainWindow):
             live_timer = QTimer(dialog)
             live_timer.timeout.connect(_live_update)
             live_timer.start(int(1000 / fps))
+            self._enlarged_live_timer = live_timer
 
         # 关闭之前的放大窗口
         if self._enlarged_dialog is not None:
@@ -1077,6 +1157,13 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event: QDropEvent):
         self.drop_overlay.hide()
         self.preview_timer.stop()
+        # 拖放切换源前关闭放大窗口
+        if getattr(self, "_enlarged_live_timer", None) is not None:
+            self._enlarged_live_timer.stop()
+            self._enlarged_live_timer = None
+        if self._enlarged_dialog is not None:
+            self._enlarged_dialog.close()
+            self._enlarged_dialog = None
         for url in event.mimeData().urls():
             file_path = Path(url.toLocalFile())
             if not file_path.exists():
@@ -1134,7 +1221,7 @@ class MainWindow(QMainWindow):
 
     def _start_video_recording(self, frame):
         now = datetime.datetime.now()
-        base_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
+        base_dir = app_path("data", "saved")
         self._save_session_dir = base_dir / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S_%f")
         self._save_session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1161,7 +1248,7 @@ class MainWindow(QMainWindow):
     def _save_detection_images(self, original, result, edges):
         """保存检测图像到 data/saved/"""
         now = datetime.datetime.now()
-        base_dir = Path(__file__).resolve().parents[2] / "data" / "saved"
+        base_dir = app_path("data", "saved")
         session_dir = base_dir / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S")
         session_dir.mkdir(parents=True, exist_ok=True)
         ts = now.strftime("%H%M%S%f")

@@ -8,6 +8,7 @@ import sys
 from PyQt5.QtWidgets import QApplication
 from src.gui.main_window import MainWindow
 from src.config.manager import ConfigManager
+from src.utils.paths import app_path
 
 
 def main():
@@ -16,7 +17,7 @@ def main():
     app = QApplication(sys.argv)
     
     # 加载配置
-    config_manager = ConfigManager("config/default.yaml")
+    config_manager = ConfigManager(str(app_path("config", "default.yaml")))
     
     # 创建主窗口
     window = MainWindow(config_manager)
