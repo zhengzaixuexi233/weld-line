@@ -65,8 +65,11 @@ class ConfigManager:
         self.profiles_path: Optional[Path] = None
         self.log_path: Optional[Path] = None
         if self.config_path:
-            self.profiles_path = self.config_path.parent / "profiles.yaml"
-            self.log_path = self.config_path.parent / "profiles_log.yaml"
+            # 用户数据存放在 config 同级的 user_data 目录，与应用配置分离
+            user_data_dir = self.config_path.parent / "user_data"
+            self.profiles_path = user_data_dir / "profiles.yaml"
+            self.log_path = user_data_dir / "profiles_log.yaml"
+            self._migrate_old_profiles()
             self._load_profiles()
         
         if self.config_path and self.config_path.exists():
@@ -224,6 +227,25 @@ class ConfigManager:
         return manager.save()
 
     # ========== 参数模板管理 ==========
+
+    def _migrate_old_profiles(self):
+        """首次升级时将 config/ 下旧的 profiles 迁移到 config/user_data/，并清理旧文件"""
+        if self.profiles_path is None:
+            return
+        if self.profiles_path.exists():
+            return  # 新位置已有文件，不迁移
+        old_profiles = self.config_path.parent / "profiles.yaml" if self.config_path else None
+        old_log = self.config_path.parent / "profiles_log.yaml" if self.config_path else None
+        if old_profiles and old_profiles.exists():
+            self.profiles_path.parent.mkdir(parents=True, exist_ok=True)
+            old_profiles.rename(self.profiles_path)
+            if old_log and old_log.exists():
+                old_log.rename(self.log_path)
+            # 删除已成空目录的旧 user_data（如果之前误建了根目录的）
+            stale_root_ud = self.config_path.parent.parent / "user_data" if self.config_path else None
+            if stale_root_ud and stale_root_ud.exists():
+                import shutil
+                shutil.rmtree(stale_root_ud, ignore_errors=True)
 
     def _load_profiles(self):
         """从文件加载参数模板"""

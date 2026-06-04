@@ -7,6 +7,14 @@
   hough_threshold: 50
   max_line_gap: 10
   min_line_length: 50
+新模板2:
+  angle_tolerance: 15
+  blur_kernel_size: 5
+  canny_high: 150
+  canny_low: 50
+  hough_threshold: 50
+  max_line_gap: 10
+  min_line_length: 50
 默认:
   angle_tolerance: 15
   blur_kernel_size: 5

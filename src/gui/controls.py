@@ -5,15 +5,23 @@ GUI控制组件模块
 """
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLabel, QSlider, QSpinBox, QDoubleSpinBox,
-    QComboBox, QPushButton, QCheckBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGroupBox,
+    QLabel,
+    QSlider,
+    QSpinBox,
+    QDoubleSpinBox,
+    QComboBox,
+    QPushButton,
+    QCheckBox,
+    QSizePolicy,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtCore import pyqtSlot
 from PyQt5.QtCore import QEvent
 from typing import Dict, Any
-
 
 # 参数提示信息字典
 PARAM_TOOLTIPS = {
@@ -149,15 +157,15 @@ PARAM_TOOLTIPS = {
 
 class ControlPanel(QWidget):
     """控制面板
-    
+
     提供检测参数的调整控件。
-    
+
     Signals:
         param_changed: 参数改变信号 (param_name, value)
         detect_clicked: 检测按钮点击信号
         source_changed: 输入源改变信号
     """
-    
+
     param_changed = pyqtSignal(str, object)
     detect_clicked = pyqtSignal()
     source_changed = pyqtSignal(str)
@@ -165,48 +173,56 @@ class ControlPanel(QWidget):
     next_image_clicked = pyqtSignal()
     display_option_changed = pyqtSignal()
     reset_params_clicked = pyqtSignal()
-    profile_changed = pyqtSignal(str)      # 参数模板切换
-    new_profile_clicked = pyqtSignal()      # 新建参数模板
-    save_profile_clicked = pyqtSignal()    # 保存参数模板
+    profile_changed = pyqtSignal(str)  # 参数模板切换
+    new_profile_clicked = pyqtSignal()  # 新建参数模板
+    save_profile_clicked = pyqtSignal()  # 保存参数模板
     delete_profile_clicked = pyqtSignal()  # 删除参数模板
-    auto_save_toggled = pyqtSignal(bool)   # 自动保存开关
-    open_saved_folder = pyqtSignal()       # 打开保存文件夹
-    camera_changed = pyqtSignal(int)       # 摄像头切换
-    open_source_folder = pyqtSignal(str)   # 打开源文件夹 (video/image)
-    
+    auto_save_toggled = pyqtSignal(bool)  # 自动保存开关
+    open_saved_folder = pyqtSignal()  # 打开保存文件夹
+    camera_changed = pyqtSignal(int)  # 摄像头切换
+    open_source_folder = pyqtSignal(str)  # 打开源文件夹 (video/image)
+
     def __init__(self, parent=None):
         """初始化控制面板"""
         super().__init__(parent)
+        self._param_label_min_width = 0
+        self._profile_wrap_threshold = 0
+        self._value_box_width = 0
         self._init_ui()
         self.installEventFilter(self)
-    
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress:
-            if obj is not self.profile_combo.view().viewport() and obj is not self.profile_combo.lineEdit():
+            if (
+                obj is not self.profile_combo.view().viewport()
+                and obj is not self.profile_combo.lineEdit()
+            ):
                 self.profile_combo.lineEdit().clearFocus()
         return super().eventFilter(obj, event)
-    
+
     def _init_ui(self):
         """初始化界面"""
+        self._param_label_min_width = self._calculate_param_label_width()
+        self._value_box_width = self._calculate_value_box_width()
         layout = QVBoxLayout(self)
-        
+
         # 输入源选择
         source_group = QGroupBox("输入源")
         source_layout = QVBoxLayout()
-        
+
         self.source_combo = QComboBox()
         self.source_combo.addItems(["摄像头", "视频文件", "图像文件"])
         self.source_combo.currentTextChanged.connect(self._on_source_changed)
-        
+
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
         self.camera_combo.hide()
-        
+
         self.source_folder_button = QPushButton("📂")
         self.source_folder_button.setFixedWidth(36)
         self.source_folder_button.clicked.connect(self._on_open_source_folder)
         self.source_folder_button.hide()
-        
+
         # 图片浏览按钮
         self.prev_button = QPushButton("上一张")
         self.prev_button.setEnabled(False)
@@ -216,30 +232,37 @@ class ControlPanel(QWidget):
         self.next_button.setEnabled(False)
         self.next_button.clicked.connect(self.next_image_clicked.emit)
         self.next_button.setFocusPolicy(Qt.NoFocus)
-        
+
         source_row = QHBoxLayout()
         source_row.addWidget(self.source_combo, 3)
         source_row.addWidget(self.camera_combo, 1)
         source_row.addWidget(self.source_folder_button, 0)
         source_layout.addLayout(source_row)
-        
+
         browse_layout = QHBoxLayout()
         browse_layout.addWidget(self.prev_button)
         browse_layout.addWidget(self.next_button)
         source_layout.addLayout(browse_layout)
-        
+
         source_group.setLayout(source_layout)
         layout.addWidget(source_group)
-        
+
         # 检测参数（合并预处理+检测）
         params_group = QGroupBox("检测参数")
         params_layout = QVBoxLayout()
- 
+
         # 参数模板（最上面）
-        profile_layout = QHBoxLayout()
-        profile_layout.setSpacing(6)
+        profile_layout = QVBoxLayout()
+        profile_layout.setSpacing(4)
+        self.profile_section_layout = profile_layout
+        profile_top_row = QHBoxLayout()
+        profile_top_row.setSpacing(6)
+        self.profile_single_row = QHBoxLayout()
+        self.profile_single_row.setSpacing(6)
         self.profile_combo = QComboBox()
         self.profile_combo.setEditable(True)
+        self.profile_combo.setMinimumWidth(90)
+        self.profile_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.profile_combo.currentTextChanged.connect(self.profile_changed.emit)
         self.new_profile_button = QPushButton("新建")
         self.new_profile_button.clicked.connect(self.new_profile_clicked.emit)
@@ -247,56 +270,70 @@ class ControlPanel(QWidget):
         self.save_profile_button.clicked.connect(self.save_profile_clicked.emit)
         self.delete_profile_button = QPushButton("删除")
         self.delete_profile_button.clicked.connect(self.delete_profile_clicked.emit)
-        self.new_profile_button.setFixedWidth(55)
-        self.save_profile_button.setFixedWidth(55)
-        self.delete_profile_button.setFixedWidth(55)
-        right_layout = QHBoxLayout()
-        right_layout.setSpacing(4)
-        right_layout.addWidget(self.new_profile_button)
-        right_layout.addWidget(self.save_profile_button)
-        right_layout.addWidget(self.delete_profile_button)
-        profile_layout.addWidget(QLabel("模板:"))
-        profile_layout.addWidget(self.profile_combo, 1)
-        profile_layout.addLayout(right_layout)
+        self.new_profile_button.setMinimumWidth(52)
+        self.new_profile_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.save_profile_button.setMinimumWidth(52)
+        self.save_profile_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.delete_profile_button.setMinimumWidth(52)
+        self.delete_profile_button.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed
+        )
+        profile_button_row = QHBoxLayout()
+        profile_button_row.setSpacing(4)
+        profile_button_row.addStretch()
+        profile_button_row.addWidget(self.new_profile_button)
+        profile_button_row.addWidget(self.save_profile_button)
+        profile_button_row.addWidget(self.delete_profile_button)
+        self.profile_label = QLabel("模板:")
+        self.profile_single_row.addWidget(self.profile_label)
+        self.profile_single_row.addWidget(self.profile_combo, 1)
+        self.profile_single_row.addWidget(self.new_profile_button)
+        self.profile_single_row.addWidget(self.save_profile_button)
+        self.profile_single_row.addWidget(self.delete_profile_button)
+        profile_top_row.addWidget(QLabel("模板:"))
+        profile_top_row.addWidget(self.profile_combo, 1)
+        self.profile_top_row = profile_top_row
+        self.profile_button_row = profile_button_row
+        self._profile_wrap_threshold = (
+            self.profile_label.sizeHint().width()
+            + self.profile_combo.minimumWidth()
+            + self.new_profile_button.minimumWidth()
+            + self.save_profile_button.minimumWidth()
+            + self.delete_profile_button.minimumWidth()
+            + 32
+        )
+        self._rebuild_profile_layout(force_wrap=False)
         params_layout.addLayout(profile_layout)
 
         # 预处理参数
         self.blur_slider = self._create_slider(
-            "模糊核大小", 1, 31, 5, 2,
-            tooltip=PARAM_TOOLTIPS.get("模糊核大小")
+            "模糊核大小", 1, 31, 5, 2, tooltip=PARAM_TOOLTIPS.get("模糊核大小")
         )
         self.clahe_slider = self._create_double_slider(
-            "CLAHE限制", 0.1, 10.0, 2.0, 0.1,
-            tooltip=PARAM_TOOLTIPS.get("CLAHE限制")
+            "CLAHE限制", 0.1, 10.0, 2.0, 0.1, tooltip=PARAM_TOOLTIPS.get("CLAHE限制")
         )
 
         params_layout.addWidget(self.blur_slider)
         params_layout.addWidget(self.clahe_slider)
- 
+
         # 检测参数
         self.canny_low_slider = self._create_slider(
-            "Canny低阈值", 0, 255, 50, 5,
-            tooltip=PARAM_TOOLTIPS.get("Canny低阈值")
+            "Canny低阈值", 0, 255, 50, 5, tooltip=PARAM_TOOLTIPS.get("Canny低阈值")
         )
         self.canny_high_slider = self._create_slider(
-            "Canny高阈值", 0, 255, 150, 5,
-            tooltip=PARAM_TOOLTIPS.get("Canny高阈值")
+            "Canny高阈值", 0, 255, 150, 5, tooltip=PARAM_TOOLTIPS.get("Canny高阈值")
         )
         self.hough_slider = self._create_slider(
-            "霍夫阈值", 1, 200, 50, 5,
-            tooltip=PARAM_TOOLTIPS.get("霍夫阈值")
+            "霍夫阈值", 1, 200, 50, 5, tooltip=PARAM_TOOLTIPS.get("霍夫阈值")
         )
         self.min_length_slider = self._create_slider(
-            "最小长度", 10, 500, 50, 10,
-            tooltip=PARAM_TOOLTIPS.get("最小长度")
+            "最小长度", 10, 500, 50, 10, tooltip=PARAM_TOOLTIPS.get("最小长度")
         )
         self.max_gap_slider = self._create_slider(
-            "最大线段间隔", 1, 100, 10, 1,
-            tooltip=PARAM_TOOLTIPS.get("最大线段间隔")
+            "最大线段间隔", 1, 100, 10, 1, tooltip=PARAM_TOOLTIPS.get("最大线段间隔")
         )
         self.angle_tolerance_slider = self._create_slider(
-            "角度容差", 1, 90, 15, 1,
-            tooltip=PARAM_TOOLTIPS.get("角度容差")
+            "角度容差", 1, 90, 15, 1, tooltip=PARAM_TOOLTIPS.get("角度容差")
         )
 
         params_layout.addWidget(self.canny_low_slider)
@@ -309,7 +346,9 @@ class ControlPanel(QWidget):
         # 恢复默认参数（最下面）
         self.reset_button = QPushButton("恢复默认参数")
         self.reset_button.clicked.connect(self.reset_params_clicked.emit)
-        self.reset_button.clicked.connect(lambda: self.profile_combo.lineEdit().clearFocus())
+        self.reset_button.clicked.connect(
+            lambda: self.profile_combo.lineEdit().clearFocus()
+        )
         params_layout.addWidget(self.reset_button)
 
         params_group.setLayout(params_layout)
@@ -332,18 +371,26 @@ class ControlPanel(QWidget):
         display_group.setLayout(display_layout)
         layout.addWidget(display_group)
 
+        self.show_original_check.stateChanged.connect(
+            lambda: self.display_option_changed.emit()
+        )
+        self.show_processed_check.stateChanged.connect(
+            lambda: self.display_option_changed.emit()
+        )
+        self.show_edges_check.stateChanged.connect(
+            lambda: self.display_option_changed.emit()
+        )
 
-        self.show_original_check.stateChanged.connect(lambda: self.display_option_changed.emit())
-        self.show_processed_check.stateChanged.connect(lambda: self.display_option_changed.emit())
-        self.show_edges_check.stateChanged.connect(lambda: self.display_option_changed.emit())
-        
         # 检测按钮 + 自动保存 + 打开文件夹（紧凑排列）
         detect_row = QHBoxLayout()
-        detect_row.setSpacing(4)
+        detect_row.setSpacing(3)
         self.detect_button = QPushButton("开始检测")
         self.detect_button.clicked.connect(self.detect_clicked.emit)
-        self.detect_button.clicked.connect(lambda: self.profile_combo.lineEdit().clearFocus())
+        self.detect_button.clicked.connect(
+            lambda: self.profile_combo.lineEdit().clearFocus()
+        )
         self.auto_save_check = QCheckBox("自动保存")
+        self.auto_save_check.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.auto_save_check.stateChanged.connect(
             lambda state: self.auto_save_toggled.emit(state == Qt.Checked)
         )
@@ -357,9 +404,69 @@ class ControlPanel(QWidget):
 
         # 初始化摄像头选项（默认输入源为摄像头）
         self._on_source_changed("摄像头")
-        
+
         layout.addStretch()
-    
+
+    def _calculate_param_label_width(self) -> int:
+        """根据当前字体计算参数标签的最小宽度。"""
+        metrics = self.fontMetrics()
+        labels = [
+            "模糊核大小",
+            "CLAHE限制",
+            "Canny低阈值",
+            "Canny高阈值",
+            "霍夫阈值",
+            "最小长度",
+            "最大线段间隔",
+            "角度容差",
+        ]
+        return max(100, max(metrics.horizontalAdvance(text) for text in labels) + 0)
+
+    def _calculate_value_box_width(self) -> int:
+        """计算参数输入框统一宽度，避免整数/浮点输入框错位。"""
+        metrics = self.fontMetrics()
+        text_width = max(
+            metrics.horizontalAdvance("500"),
+            metrics.horizontalAdvance("10.00"),
+        )
+        button_and_frame_padding = 22
+        return max(74, text_width + button_and_frame_padding)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rebuild_profile_layout(
+            force_wrap=self.width() < self._profile_wrap_threshold
+        )
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._clear_layout(child_layout)
+
+    def _rebuild_profile_layout(self, force_wrap: bool):
+        self._clear_layout(self.profile_section_layout)
+        self._clear_layout(self.profile_single_row)
+        self._clear_layout(self.profile_top_row)
+        self._clear_layout(self.profile_button_row)
+        if force_wrap:
+            self.profile_top_row.addWidget(self.profile_label)
+            self.profile_top_row.addWidget(self.profile_combo, 1)
+            self.profile_button_row.addStretch()
+            self.profile_button_row.addWidget(self.new_profile_button)
+            self.profile_button_row.addWidget(self.save_profile_button)
+            self.profile_button_row.addWidget(self.delete_profile_button)
+            self.profile_section_layout.addLayout(self.profile_top_row)
+            self.profile_section_layout.addLayout(self.profile_button_row)
+        else:
+            self.profile_single_row.addWidget(self.profile_label)
+            self.profile_single_row.addWidget(self.profile_combo, 1)
+            self.profile_single_row.addWidget(self.new_profile_button)
+            self.profile_single_row.addWidget(self.save_profile_button)
+            self.profile_single_row.addWidget(self.delete_profile_button)
+            self.profile_section_layout.addLayout(self.profile_single_row)
+
     def _create_slider(
         self,
         label: str,
@@ -367,44 +474,45 @@ class ControlPanel(QWidget):
         max_val: int,
         default: int,
         step: int = 1,
-        tooltip: str = None
+        tooltip: str = None,
     ) -> QWidget:
         """创建滑块控件"""
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         label_widget = QLabel(label)
-        label_widget.setFixedWidth(100)
-        
+        label_widget.setMinimumWidth(self._param_label_min_width)
+        label_widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+
         # 设置提示信息
         if tooltip:
             label_widget.setToolTip(tooltip)
-        
+
         slider = QSlider(Qt.Horizontal)
         slider.setMinimum(min_val)
         slider.setMaximum(max_val)
         slider.setValue(default)
         slider.setSingleStep(step)
-        
+
         spin = QSpinBox()
         spin.setMinimum(min_val)
         spin.setMaximum(max_val)
         spin.setValue(default)
-        spin.setFixedWidth(60)
-        
+        spin.setFixedWidth(self._value_box_width)
+
         slider.valueChanged.connect(spin.setValue)
         spin.valueChanged.connect(slider.setValue)
         slider.valueChanged.connect(
             lambda v, name=label: self.param_changed.emit(name, v)
         )
-        
+
         layout.addWidget(label_widget)
-        layout.addWidget(slider)
+        layout.addWidget(slider, 1)
         layout.addWidget(spin)
-        
+
         return widget
-    
+
     def _create_double_slider(
         self,
         label: str,
@@ -412,61 +520,57 @@ class ControlPanel(QWidget):
         max_val: float,
         default: float,
         step: float = 0.1,
-        tooltip: str = None
+        tooltip: str = None,
     ) -> QWidget:
         """创建浮点数滑块控件"""
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         label_widget = QLabel(label)
-        label_widget.setFixedWidth(100)
-        
+        label_widget.setMinimumWidth(self._param_label_min_width)
+        label_widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+
         # 设置提示信息
         if tooltip:
             label_widget.setToolTip(tooltip)
-        
+
         factor = int(1.0 / step) if step < 1 else 1
-        
+
         spin = QDoubleSpinBox()
         spin.setMinimum(min_val)
         spin.setMaximum(max_val)
         spin.setValue(default)
         spin.setSingleStep(step)
-        spin.setFixedWidth(60)
-        
+        spin.setDecimals(max(0, len(f"{step:.10f}".rstrip("0").split(".")[-1])))
+        spin.setFixedWidth(self._value_box_width)
+
         slider = QSlider(Qt.Horizontal)
         slider.setMinimum(int(min_val * factor))
         slider.setMaximum(int(max_val * factor))
         slider.setValue(int(default * factor))
         slider.setSingleStep(1)
-        
+
         spin.valueChanged.connect(
             lambda v, s=slider, f=factor: s.setValue(int(round(v * f)))
         )
-        slider.valueChanged.connect(
-            lambda v, sp=spin, f=factor: sp.setValue(v / f)
-        )
+        slider.valueChanged.connect(lambda v, sp=spin, f=factor: sp.setValue(v / f))
         spin.valueChanged.connect(
             lambda v, name=label: self.param_changed.emit(name, v)
         )
         slider.valueChanged.connect(
             lambda v, name=label, f=factor: self.param_changed.emit(name, v / f)
         )
-        
+
         layout.addWidget(label_widget)
-        layout.addWidget(slider)
+        layout.addWidget(slider, 1)
         layout.addWidget(spin)
-        
+
         return widget
-    
+
     def _on_source_changed(self, text: str):
         """输入源改变处理"""
-        source_map = {
-            "摄像头": "camera",
-            "视频文件": "video",
-            "图像文件": "image"
-        }
+        source_map = {"摄像头": "camera", "视频文件": "video", "图像文件": "image"}
         source = source_map.get(text, "camera")
         if source in ("video", "image"):
             self.source_folder_button.show()
@@ -474,6 +578,7 @@ class ControlPanel(QWidget):
             self.source_folder_button.hide()
         if source == "camera":
             from ..input_sources.camera_source import CameraSource
+
             cameras = CameraSource.list_cameras()
             self.camera_combo.blockSignals(True)
             self.camera_combo.clear()
@@ -488,14 +593,14 @@ class ControlPanel(QWidget):
         else:
             self.camera_combo.hide()
         self.source_changed.emit(source)
-    
+
     @pyqtSlot(int)
     def _on_camera_changed(self, index: int):
         """摄像头切换"""
         cam_id = self.camera_combo.itemData(index)
         if cam_id >= 0:
             self.camera_changed.emit(cam_id)
-    
+
     @pyqtSlot()
     def _on_open_source_folder(self):
         """打开当前输入源的文件夹"""
@@ -505,60 +610,70 @@ class ControlPanel(QWidget):
         src = source_map.get(text, "")
         if src in ("video", "image"):
             self.open_source_folder.emit(src)
-    
+
     def get_params(self) -> Dict[str, Any]:
         """获取当前参数"""
         return {
-            'blur_kernel_size': self.blur_slider.findChild(QSlider).value(),
-            'canny_low': self.canny_low_slider.findChild(QSlider).value(),
-            'canny_high': self.canny_high_slider.findChild(QSlider).value(),
-            'hough_threshold': self.hough_slider.findChild(QSlider).value(),
-            'min_line_length': self.min_length_slider.findChild(QSlider).value(),
-            'max_line_gap': self.max_gap_slider.findChild(QSlider).value(),
-            'angle_tolerance': self.angle_tolerance_slider.findChild(QSlider).value(),
+            "blur_kernel_size": self.blur_slider.findChild(QSlider).value(),
+            "canny_low": self.canny_low_slider.findChild(QSlider).value(),
+            "canny_high": self.canny_high_slider.findChild(QSlider).value(),
+            "hough_threshold": self.hough_slider.findChild(QSlider).value(),
+            "min_line_length": self.min_length_slider.findChild(QSlider).value(),
+            "max_line_gap": self.max_gap_slider.findChild(QSlider).value(),
+            "angle_tolerance": self.angle_tolerance_slider.findChild(QSlider).value(),
         }
-    
+
     def set_params(self, params: Dict[str, Any]):
         """设置参数"""
-        if 'blur_kernel_size' in params:
-            self.blur_slider.findChild(QSlider).setValue(int(params['blur_kernel_size']))
-        if 'canny_low' in params:
-            self.canny_low_slider.findChild(QSlider).setValue(int(params['canny_low']))
-        if 'canny_high' in params:
-            self.canny_high_slider.findChild(QSlider).setValue(int(params['canny_high']))
-        if 'hough_threshold' in params:
-            self.hough_slider.findChild(QSlider).setValue(int(params['hough_threshold']))
-        if 'min_line_length' in params:
-            self.min_length_slider.findChild(QSlider).setValue(int(params['min_line_length']))
-        if 'max_line_gap' in params:
-            self.max_gap_slider.findChild(QSlider).setValue(int(params['max_line_gap']))
-        if 'angle_tolerance' in params:
-            self.angle_tolerance_slider.findChild(QSlider).setValue(int(params['angle_tolerance']))
+        if "blur_kernel_size" in params:
+            self.blur_slider.findChild(QSlider).setValue(
+                int(params["blur_kernel_size"])
+            )
+        if "canny_low" in params:
+            self.canny_low_slider.findChild(QSlider).setValue(int(params["canny_low"]))
+        if "canny_high" in params:
+            self.canny_high_slider.findChild(QSlider).setValue(
+                int(params["canny_high"])
+            )
+        if "hough_threshold" in params:
+            self.hough_slider.findChild(QSlider).setValue(
+                int(params["hough_threshold"])
+            )
+        if "min_line_length" in params:
+            self.min_length_slider.findChild(QSlider).setValue(
+                int(params["min_line_length"])
+            )
+        if "max_line_gap" in params:
+            self.max_gap_slider.findChild(QSlider).setValue(int(params["max_line_gap"]))
+        if "angle_tolerance" in params:
+            self.angle_tolerance_slider.findChild(QSlider).setValue(
+                int(params["angle_tolerance"])
+            )
 
     def reset_to_defaults(self):
         """重置所有参数为默认值"""
         defaults = {
-            'blur_kernel_size': 5,
-            'canny_low': 50,
-            'canny_high': 150,
-            'hough_threshold': 50,
-            'min_line_length': 50,
-            'max_line_gap': 10,
-            'angle_tolerance': 15,
+            "blur_kernel_size": 5,
+            "canny_low": 50,
+            "canny_high": 150,
+            "hough_threshold": 50,
+            "min_line_length": 50,
+            "max_line_gap": 10,
+            "angle_tolerance": 15,
         }
         self.set_params(defaults)
-    
+
     def get_display_options(self) -> Dict[str, bool]:
         """获取显示选项状态"""
         return {
-            'show_original': self.show_original_check.isChecked(),
-            'show_processed': self.show_processed_check.isChecked(),
-            'show_edges': self.show_edges_check.isChecked(),
+            "show_original": self.show_original_check.isChecked(),
+            "show_processed": self.show_processed_check.isChecked(),
+            "show_edges": self.show_edges_check.isChecked(),
         }
 
     def set_profiles(self, names: list, current: str = None):
         """设置参数模板列表
-        
+
         Args:
             names: 模板名称列表
             current: 当前选中的模板名称

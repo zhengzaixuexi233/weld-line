@@ -86,10 +86,13 @@ class ScalableImageLabel(QWidget):
         self._offset = QPointF(0, 0)
         self.setCursor(QCursor(Qt.OpenHandCursor))
 
-    def setPixmap(self, pixmap):
+    def setPixmap(self, pixmap, preserve_view=False):
         self._original_pixmap = pixmap
-        self._zoom_factor = 1.0
-        self._offset = QPointF(0, 0)
+        if not preserve_view:
+            self._zoom_factor = 1.0
+            self._offset = QPointF(0, 0)
+        else:
+            self._clamp_offset()
         self.update()
 
     def wheelEvent(self, event):
@@ -100,7 +103,7 @@ class ScalableImageLabel(QWidget):
             self._zoom_factor += 0.2
         elif delta < 0:
             self._zoom_factor -= 0.2
-        self._zoom_factor = max(0.8, min(3.0, self._zoom_factor))
+        self._zoom_factor = max(1.0, min(3.0, self._zoom_factor))
         self._clamp_offset()
         self.update()
         event.accept()
@@ -201,7 +204,7 @@ class MainWindow(QMainWindow):
     
     def _init_ui(self):
         self.setWindowTitle("焊缝识别系统")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1240, 800)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
@@ -240,7 +243,9 @@ class MainWindow(QMainWindow):
         display_layout.addWidget(self.result_label, stretch=1)
         
         self.control_panel = ControlPanel()
-        self.control_panel.setFixedWidth(380)
+        self.control_panel.setMinimumWidth(400)
+        self.control_panel.setMaximumWidth(480)
+        self.control_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         
         self.control_panel.detect_clicked.connect(self._on_detect_clicked)
         self.control_panel.source_changed.connect(self._on_source_changed)
@@ -260,8 +265,8 @@ class MainWindow(QMainWindow):
         # 全局空格键：视频源切换播放，其他源切换检测
         QShortcut(Qt.Key_Space, self).activated.connect(self._toggle_space_action)
 
-        main_layout.addLayout(display_layout)
-        main_layout.addWidget(self.control_panel)
+        main_layout.addLayout(display_layout, 3)
+        main_layout.addWidget(self.control_panel, 1)
         self.statusBar().showMessage("就绪")
     
     @pyqtSlot(bool)
@@ -853,6 +858,13 @@ class MainWindow(QMainWindow):
         seconds = max(0, int(seconds))
         return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
+    def _build_time_label(self, sample_text: str) -> QLabel:
+        label = QLabel(sample_text)
+        label.setAlignment(Qt.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        label.setMinimumWidth(label.fontMetrics().horizontalAdvance(sample_text) + 16)
+        return label
+
     def _create_video_progress(self):
         """在 display_layout 末尾动态创建视频进度条"""
         if self.video_progress_row is not None:
@@ -860,16 +872,12 @@ class MainWindow(QMainWindow):
         row = QWidget()
         lay = QHBoxLayout(row)
         lay.setContentsMargins(0, 2, 0, 0)
-        self.video_current_time_label = QLabel("00:00")
-        self.video_current_time_label.setFixedWidth(50)
-        self.video_current_time_label.setAlignment(Qt.AlignCenter)
+        self.video_current_time_label = self._build_time_label("00:00")
         self.video_slider = ClickableSlider(Qt.Horizontal)
         self.video_slider.setFocusPolicy(Qt.NoFocus)
         self.video_slider.setMinimum(0)
         self.video_slider.setMaximum(0)
-        self.video_total_time_label = QLabel("00:00")
-        self.video_total_time_label.setFixedWidth(50)
-        self.video_total_time_label.setAlignment(Qt.AlignCenter)
+        self.video_total_time_label = self._build_time_label("00:00")
         # 播放/暂停按钮
         self.video_play_btn = QPushButton("▶")
         self.video_play_btn.setFixedWidth(36)
@@ -1033,9 +1041,11 @@ class MainWindow(QMainWindow):
             dlg_play_btn = QPushButton("⏸" if self.is_detecting else "▶")
             dlg_play_btn.setFixedWidth(36)
             dlg_play_btn.setFocusPolicy(Qt.NoFocus)
-            dlg_time_label = QLabel("00:00 / " + self._format_time(self.current_source.frame_count / (self.current_source.get_fps() or 30)))
-            dlg_time_label.setFixedWidth(120)
-            dlg_time_label.setAlignment(Qt.AlignCenter)
+            dlg_time_label = self._build_time_label(
+                "00:00 / " + self._format_time(
+                    self.current_source.frame_count / (self.current_source.get_fps() or 30)
+                )
+            )
             dlg_slider = ClickableSlider(Qt.Horizontal)
             dlg_slider.setFocusPolicy(Qt.NoFocus)
             dlg_slider.setMinimum(0)
@@ -1099,7 +1109,7 @@ class MainWindow(QMainWindow):
                 elif image_type == "edges":
                     frame = self._last_edges
                 if frame is not None:
-                    image_label.setPixmap(_numpy_to_pixmap(frame))
+                    image_label.setPixmap(_numpy_to_pixmap(frame), preserve_view=True)
                 # 同步进度条和按钮状态
                 if dlg_play_btn is not None:
                     dlg_play_btn.setText("⏸" if self.is_video_playing else "▶")
