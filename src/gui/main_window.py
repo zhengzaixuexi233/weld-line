@@ -535,6 +535,17 @@ class MainWindow(QMainWindow):
                     self._display_image(result_frame, self.result_label)
                 if options['show_edges']:
                     self._display_image(edges, self.edges_label)
+            # 图片源改参数时，重新检测当前图片并更新放大窗口
+            elif isinstance(self.current_source, ImageSource) and self.is_detecting and self._last_frame is not None:
+                detections, processed, edges = self.detector.detect(self._last_frame)
+                result_frame = draw_detections(self._last_frame, detections)
+                self._last_result = result_frame
+                self._last_edges = edges
+                options = self.control_panel.get_display_options()
+                if options['show_processed']:
+                    self._display_image(result_frame, self.result_label)
+                if options['show_edges']:
+                    self._display_image(edges, self.edges_label)
 
     @pyqtSlot()
     def _on_display_option_changed(self):
@@ -1096,10 +1107,10 @@ class MainWindow(QMainWindow):
             dlg_slider.valueChanged.connect(_on_dlg_moved)
 
         # 实时更新：放大画面 + 进度条
-        if isinstance(self.current_source, (VideoSource, CameraSource)):
+        if isinstance(self.current_source, (VideoSource, CameraSource, ImageSource)):
             def _live_update():
                 # 源已切换时停止更新
-                if not isinstance(self.current_source, (VideoSource, CameraSource)):
+                if not isinstance(self.current_source, (VideoSource, CameraSource, ImageSource)):
                     return
                 frame = None
                 if image_type == "original":
